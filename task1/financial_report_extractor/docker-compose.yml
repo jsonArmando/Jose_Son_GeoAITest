@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:13
+    container_name: financial_reports_db
+    environment:
+      POSTGRES_USER: user # Asegúrate que coincida con .env y DATABASE_URL
+      POSTGRES_PASSWORD: password # Asegúrate que coincida con .env y DATABASE_URL
+      POSTGRES_DB: financial_reports_db
+    ports:
+      - "5432:5432" # Expone el puerto de la DB al host (opcional, para debug)
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    restart: unless-stopped
+
+  app:
+    build: .
+    container_name: financial_reports_app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    env_file:
+      - .env # Carga las variables de entorno desde el archivo .env
+    volumes:
+      - ./app:/app # Monta el código de la app para desarrollo (hot-reloading si FastAPI está configurado para ello)
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

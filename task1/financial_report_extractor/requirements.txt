@@ -1,0 +1,15 @@
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+sqlalchemy>=1.4.0
+psycopg2-binary>=2.9.0 # Driver de PostgreSQL
+pydantic>=2.0.0
+pydantic-settings>=2.0.0 # Para la clase Settings
+python-dotenv>=0.20.0
+requests>=2.25.0
+beautifulsoup4>=4.9.0
+google-generativeai>=0.5.0 # SDK de Gemini
+PyPDF2>=3.0.0 # Para extraer texto de PDFs
+
+# Opcional, para análisis de datos si se hace localmente o en notebooks
+# pandas
+# numpy
