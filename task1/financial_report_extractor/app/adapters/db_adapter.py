@@ -4,8 +4,8 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session
 from sqlalchemy.sql import func # Para timestamps automáticos
 
-from app.config import settings # Importa la configuración de la aplicación (DATABASE_URL)
-from app.core import schemas # Importa los esquemas Pydantic para validación y tipado
+from config import settings # Importa la configuración de la aplicación (DATABASE_URL)
+from core import schemas # Importa los esquemas Pydantic para validación y tipado
 from typing import List, Optional, Dict, Any
 
 # --- Configuración de SQLAlchemy ---

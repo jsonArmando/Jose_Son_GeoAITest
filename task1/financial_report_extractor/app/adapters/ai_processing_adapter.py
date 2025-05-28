@@ -1,7 +1,7 @@
 # app/adapters/ai_processing_adapter.py
 import google.generativeai as genai
-from app.config import settings
-from app.core import ai_prompts, schemas
+from config import settings
+from core import ai_prompts, schemas
 import json
 from typing import Optional, Tuple, Dict, Any
 import PyPDF2 # Para extraer texto de PDFs

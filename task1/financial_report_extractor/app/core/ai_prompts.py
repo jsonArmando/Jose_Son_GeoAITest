@@ -1,97 +1,69 @@
 # app/core/ai_prompts.py
 
-# Estos prompts son ejemplos y necesitarán ser refinados y probados.
-# La efectividad de la extracción dependerá en gran medida de la calidad de estos prompts.
+# !!! IMPORTANTE: Revisa y ajusta estas listas para que coincidan EXACTAMENTE
+# con los nombres de las métricas de las tablas que quieres construir,
+# según las imágenes proporcionadas en el test. !!!
 
-# Lista de métricas objetivo basada en la imagen proporcionada en el README del test.
-# Es crucial que estos nombres coincidan con lo que se espera en las tablas.
-# Se pueden añadir más o ajustar según sea necesario.
 EXPECTED_OPERATIONAL_METRICS = [
-    "Gold produced (oz)",
-    "Gold sold (oz)",
-    "Average realized gold price ($/oz)",
-    "Total cash cost ($/oz sold)", # Puede que no siempre esté como "Total"
-    "All-in sustaining cost (AISC) ($/oz sold)" # Puede que no siempre esté como "Total"
-    # Añadir más si se identifican en la imagen o son relevantes
-    # "Underground production ore (tonnes milled)",
-    # "Underground grade (g/t milled)",
-    # "Processing plant recovery (%)"
+    "Gold produced (oz)", # Ejemplo
+    "Gold sold (oz)",     # Ejemplo
+    "Ore mined (kt) - ELG Open Pit", # Ejemplo si quieres desglosar así
+    "Ore mined (tpd) - ELG Open Pit", # Ejemplo
+    "Waste mined (kt) - ELG Open Pit", # Ejemplo
+    "Strip ratio (waste:ore) - ELG Open Pit", # Ejemplo
+    "Gold grade (gpt) - ELG Open Pit", # Ejemplo
+    "Ore mined (kt) - ELG Underground", # Ejemplo
+    "Ore mined (tpd) - ELG Underground", # Ejemplo
+    "Gold grade (gpt) - ELG Underground", # Ejemplo
+    "Ore processed (kt)", # Ejemplo
+    "Ore processed (tpd)", # Ejemplo
+    "Gold grade (gpt) - Processing", # Ejemplo
+    "Gold recovery (%)", # Ejemplo
+    # Añade aquí TODAS las métricas operativas de tu tabla objetivo
 ]
 
 EXPECTED_FINANCIAL_METRICS = [
-    "Revenue",
-    "Cost of sales", # A veces "Cost of goods sold"
-    "Gross profit", # O "Gross margin"
-    "Adjusted EBITDA", # A veces solo "EBITDA"
-    "Income (loss) from mine operations",
-    "Net income (loss)", # O "Profit (loss) for the period"
-    "Earnings (loss) per share - basic", # EPS
-    "Earnings (loss) per share - diluted",
-    "Cash flow from (used in) operating activities", # O variaciones
-    "Capital expenditures", # Capex
-    # Añadir más si se identifican en la imagen o son relevantes
-    # "Exploration and evaluation expenditures",
-    # "Cash and cash equivalents",
-    # "Total debt"
+    "Revenue (M$)", # Ejemplo, considera si incluyes la unidad en el nombre esperado
+    "Cost of sales (M$)", # Ejemplo
+    "Gross profit (M$)", # Ejemplo
+    "Adjusted EBITDA (M$)", # Ejemplo
+    "Net income (loss) (M$)", # Ejemplo
+    "Earnings (loss) per share - basic ($)", # Ejemplo
+    "Net cash generated from operating activities (M$)", # Ejemplo
+    "Free cash flow (M$)", # Ejemplo
+    "Media Luna Project capex (M$)", # Ejemplo
+    "Total cash costs ($/oz)", # Ejemplo
+    "All-in sustaining costs ($/oz)", # Ejemplo
+    "Average realized gold price ($/oz)", # Ejemplo
+    # Añade aquí TODAS las métricas financieras de tu tabla objetivo
 ]
 
 
 def get_pdf_structure_extraction_prompt(pdf_text_content: str) -> str:
-    """
-    Prompt para un LLM (Gemini) para extraer estructura y contenido de un PDF.
-    Asume que pdf_text_content es el texto crudo extraído de un PDF.
-    """
-    # Se podría mejorar este prompt para pedir al LLM que identifique encabezados,
-    # párrafos, y especialmente tablas con sus filas y columnas.
-    # Para simplificar, inicialmente podríamos solo pasar el texto y pedir que el
-    # siguiente LLM (extractor de métricas) trabaje sobre el texto plano.
-    # Sin embargo, una extracción estructurada aquí ayudaría mucho al siguiente paso.
-
+    # Este prompt es opcional si el de extracción de métricas funciona bien con texto crudo.
+    # Podría usarse para un pre-procesamiento si la extracción directa es difícil.
+    # Por ahora, nos enfocamos en el prompt de extracción de métricas.
     prompt = f"""
-Eres un asistente de IA experto en analizar documentos PDF financieros.
+Eres un asistente de IA especializado en analizar documentos PDF financieros.
 El siguiente es el contenido de texto extraído de un informe financiero:
 --- BEGIN PDF TEXT CONTENT ---
-{pdf_text_content}
+{pdf_text_content[:200000]} 
 --- END PDF TEXT CONTENT ---
 
-Tu tarea es analizar este texto y prepararlo para una extracción de métricas financieras.
-Por favor, intenta identificar y estructurar la información de la siguiente manera:
-1.  **Identificación del Periodo del Informe:** Busca frases que indiquen el periodo del informe (ej. "Three months ended March 31, 2023", "Year ended December 31, 2022"). Extrae el año y el trimestre (Q1, Q2, Q3, Q4) o si es un informe Anual (FY).
-2.  **Extracción de Tablas Clave:** Identifica cualquier tabla que parezca contener datos financieros u operativos. Si puedes, formatea cada tabla como una lista de listas (representando filas y celdas) o un JSON estructurado. Presta especial atención a las tablas tituladas "Consolidated Statements of Operations", "Consolidated Balance Sheets", "Consolidated Statements of Cash Flows", "Operational Highlights", "Financial Highlights", o similares.
-3.  **Texto Relevante:** Extrae bloques de texto que parezcan discutir resultados financieros, producción, ventas, costos, o proyecciones.
-
-Devuelve tu análisis en formato JSON. Ejemplo de la estructura deseada:
+Tu tarea es analizar este texto e identificar secciones clave y tablas que contengan datos financieros u operativos.
+Extrae el año y el trimestre (Q1, Q2, Q3, Q4) o si es un informe Anual (FY).
+Formatea las tablas que encuentres como listas de listas o un JSON estructurado.
+Devuelve tu análisis en formato JSON. Ejemplo:
 {{
-  "report_period_info": {{
-    "year": YYYY,
-    "quarter": "QX | FY | Not found",
-    "period_description_found": "Texto original del periodo encontrado en el documento"
-  }},
-  "extracted_tables": [
-    {{
-      "table_name_guess": "Nombre estimado de la tabla (ej: Financial Highlights)",
-      "table_data_csv_like": "COL1_HEADER,COL2_HEADER\\nROW1_VAL1,ROW1_VAL2\\nROW2_VAL1,ROW2_VAL2"
-      // Opcionalmente: "table_data_json": [ { "COL1_HEADER": "ROW1_VAL1", ... } ]
-    }}
-    // ... más tablas
-  ],
-  "relevant_text_sections": [
-    "Texto relevante sección 1...",
-    "Texto relevante sección 2..."
-  ]
+  "report_period_info": {{ "year": YYYY, "quarter": "QX | FY", "text_found": "Texto original del periodo" }},
+  "extracted_tables": [ {{ "table_name_guess": "Nombre tabla", "data_csv": "col1,col2\\nval1,val2" }} ],
+  "relevant_text_sections": ["Texto relevante..."]
 }}
-
-Si no puedes identificar alguna parte, usa "Not found" o un array/objeto vacío según corresponda.
-Prioriza la precisión. No inventes información.
+Si no puedes identificar alguna parte, usa "Not found" o un array/objeto vacío.
 """
     return prompt
 
-def get_metric_extraction_prompt(structured_pdf_data: str, report_name: str) -> str:
-    """
-    Prompt para el LLM (Gemini) para extraer métricas específicas de los datos estructurados del PDF.
-    structured_pdf_data es el JSON devuelto por el LLM anterior.
-    """
-    # Convertir listas de métricas a strings para el prompt
+def get_metric_extraction_prompt(structured_pdf_data_or_raw_text: str, report_name: str) -> str:
     op_metrics_str = "\n- ".join(EXPECTED_OPERATIONAL_METRICS)
     fin_metrics_str = "\n- ".join(EXPECTED_FINANCIAL_METRICS)
 
@@ -99,20 +71,20 @@ def get_metric_extraction_prompt(structured_pdf_data: str, report_name: str) -> 
 Eres un analista financiero experto en extraer métricas clave de informes financieros de empresas mineras, específicamente Torex Gold.
 El nombre del informe que estás analizando es: "{report_name}"
 
-A partir de los siguientes datos, que han sido pre-procesados de un informe financiero en PDF:
---- BEGIN PRE-PROCESSED PDF DATA (JSON) ---
-{structured_pdf_data}
---- END PRE-PROCESSED PDF DATA (JSON) ---
+A partir del siguiente texto extraído de un informe financiero en PDF (puede ser texto crudo o datos pre-estructurados):
+--- BEGIN PDF DATA ---
+{structured_pdf_data_or_raw_text[:200000]} 
+--- END PDF DATA ---
 
-Tu tarea es extraer las siguientes métricas para construir dos tablas: "Operational Highlights" y "Financial Highlights".
-Para cada métrica, busca el valor correspondiente al **trimestre actual** (ej. "Three months ended [Date]") Y el valor **acumulado del año hasta la fecha** (YTD, ej. "Six months ended [Date]", "Nine months ended [Date]", "Year ended [Date]").
+Tu tarea principal es extraer las siguientes métricas para construir dos tablas: "Operational Highlights" y "Financial Highlights".
+Para cada métrica, debes encontrar el valor correspondiente al **trimestre actual** (ej. "Three months ended [Date]", "Q1 2023") Y el valor **acumulado del año hasta la fecha** (YTD, ej. "Six months ended [Date]", "Year ended [Date]", "Full Year").
 
-**Instrucciones Importantes:**
-1.  **Identificación del Periodo:** Usa la información en `report_period_info` del JSON de entrada, o infiérelo del contexto si es necesario, para determinar el año y el trimestre (Q1, Q2, Q3, Q4) o si es un informe Anual (FY). Si el informe es anual (FY), el valor "trimestral" y "YTD" serán el mismo (el valor anual).
-2.  **Valores Numéricos:** Intenta extraer los valores numéricos. Si los números están en miles o millones (ej. "USD in thousands"), anota esto o, idealmente, convierte al valor completo (ej. 500 thousands -> 500000). Si no es posible la conversión, mantén el valor como está pero indica la unidad si es clara (ej. "500 (thousands USD)").
-3.  **Datos Faltantes:** Si una métrica específica no se encuentra en el documento o no se puede determinar con certeza, devuelve el string "Not found" para ese valor. NO INVENTES VALORES.
-4.  **Unidades:** Presta atención a las unidades (ej. oz, $, t, g/t). Si es posible, inclúyelas o asegúrate de que el contexto sea claro. Para precios y costos por onza, el valor ya debería estar en $/oz.
-5.  **Variaciones de Nombres:** Las métricas pueden tener nombres ligeramente diferentes en los informes. Usa tu juicio para mapearlas a las métricas solicitadas. Por ejemplo, "Profit for the period" es "Net income". "All-in sustaining costs" es "AISC".
+**Instrucciones Cruciales:**
+1.  **Identificación del Periodo:** Primero, determina el **año** y el **trimestre** (Q1, Q2, Q3, Q4) o si es un informe **Anual (FY)** al que se refiere el documento. Incluye esto en `report_details_inferred`.
+2.  **Nombres de Métricas:** Busca las métricas EXACTAMENTE como se listan abajo. Si una métrica en el documento tiene un nombre ligeramente diferente pero significa lo mismo, mapeala al nombre de la lista.
+3.  **Valores Numéricos:** Extrae los valores numéricos. Si los números están expresados en miles (ej. "USD in thousands", "000s"), convierte al valor completo (ej. 500 thousands -> 500000). Si están en millones (M$), indícalo o convierte (ej. 10.5M -> 10500000). Si no puedes convertir, mantén el valor como está pero anota la unidad (ej. "10.5 (Millions USD)"). Para costos por onza ($/oz), el valor ya está en la unidad correcta.
+4.  **Datos Faltantes:** Si una métrica específica o uno de sus valores (trimestral o YTD) no se encuentra en el documento o no se puede determinar con certeza, devuelve el string "Not found" para ese valor específico. NO INVENTES VALORES.
+5.  **Unidades:** Presta atención a las unidades (ej. oz, $, t, g/t, M$, koz). Si el nombre de la métrica en la lista ya incluye la unidad (ej. "Revenue (M$)"), asegúrate que el valor corresponda a esa unidad. Si la métrica es solo "Revenue", el valor debe ser el número completo.
 
 **Tabla 1: Operational Highlights**
 Métricas a extraer (busca el valor trimestral y YTD para cada una):
@@ -122,28 +94,43 @@ Métricas a extraer (busca el valor trimestral y YTD para cada una):
 Métricas a extraer (busca el valor trimestral y YTD para cada una):
 - {fin_metrics_str}
 
-**Formato de Salida Obligatorio (JSON):**
+**Formato de Salida Obligatorio (JSON VÁLIDO):**
 Devuelve la información ÚNICAMENTE en el siguiente formato JSON. No incluyas explicaciones adicionales fuera de este JSON.
 {{
   "report_details_inferred": {{
-    "year": YYYY, // Año inferido del informe
-    "quarter": "QX | FY" // Trimestre (Q1, Q2, Q3, Q4) o Año Completo (FY) inferido
+    "year": "YYYY | Not found", 
+    "quarter": "Q1 | Q2 | Q3 | Q4 | FY | Not found"
   }},
   "operational_highlights": [
-    {{ "metric_name": "Nombre de la métrica operativa", "quarter_value": "VALOR_TRIMESTRAL | Not found", "ytd_value": "VALOR_YTD | Not found" }},
-    // ... todas las métricas operativas solicitadas
+    // Para cada métrica en EXPECTED_OPERATIONAL_METRICS:
+    {{ "metric_name": "Nombre de la métrica operativa de la lista", "quarter_value": "VALOR_TRIMESTRAL | Not found", "ytd_value": "VALOR_YTD | Not found" }}
+    // ... más métricas operativas
   ],
   "financial_highlights": [
-    {{ "metric_name": "Nombre de la métrica financiera", "quarter_value": "VALOR_TRIMESTRAL | Not found", "ytd_value": "VALOR_YTD | Not found" }},
-    // ... todas las métricas financieras solicitadas
+    // Para cada métrica en EXPECTED_FINANCIAL_METRICS:
+    {{ "metric_name": "Nombre de la métrica financiera de la lista", "quarter_value": "VALOR_TRIMESTRAL | Not found", "ytd_value": "VALOR_YTD | Not found" }}
+    // ... más métricas financieras
   ],
-  "llm_extraction_notes": "Cualquier nota o suposición importante que hiciste durante la extracción (ej. cómo manejaste 'USD in thousands', o si una métrica fue difícil de encontrar)."
+  "llm_extraction_notes": "Cualquier observación, suposición importante o dificultad encontrada durante la extracción (ej. cómo manejaste 'USD in thousands', si una métrica fue difícil de encontrar, o si el documento parecía ser de un periodo diferente al esperado)."
 }}
 
-Asegúrate de que la salida sea un JSON válido. Incluye TODAS las métricas solicitadas en las listas, usando "Not found" si es necesario.
+Asegúrate de que la salida sea un JSON válido. Incluye TODAS las métricas solicitadas en las listas `operational_highlights` y `financial_highlights`, usando "Not found" si es necesario para los valores.
 El campo `report_details_inferred` es tu mejor estimación del periodo del informe basado en el contenido.
+Si el informe es claramente Anual (FY), el `quarter_value` y el `ytd_value` deberían ser el mismo (el valor anual).
+Si el informe es un Q4 que también resume el año completo, el `quarter_value` es para Q4 y el `ytd_value` es para el año completo.
 """
-    return prompt
+    # Truncar el prompt si es demasiado largo para asegurar que la solicitud no falle por tamaño
+    # Aunque Gemini 1.5 Flash tiene un contexto grande, los prompts muy largos pueden ser problemáticos.
+    # La parte más variable es structured_pdf_data_or_raw_text.
+    # El resto del prompt es fijo.
+    prompt_template_len = len(prompt) - len(structured_pdf_data_or_raw_text)
+    max_text_len = 3000000 - prompt_template_len - 1000 # Dejar margen; Gemini 1.5 Flash es 1M tokens, ~4M chars
+                                                       # Reducido a 3M chars para ser más conservador con el prompt total.
+    
+    if len(structured_pdf_data_or_raw_text) > max_text_len:
+        print(f"AI Prompts: Texto del PDF truncado de {len(structured_pdf_data_or_raw_text)} a {max_text_len} caracteres para el prompt.")
+        truncated_text = structured_pdf_data_or_raw_text[:max_text_len]
+        # Reconstruir el prompt con el texto truncado
+        prompt = prompt.replace(structured_pdf_data_or_raw_text, truncated_text)
 
-# Podríamos añadir más prompts, por ejemplo, uno para validar la salida del LLM
-# o para calcular el score de precisión si quisiéramos que el LLM participara en eso.
+    return prompt

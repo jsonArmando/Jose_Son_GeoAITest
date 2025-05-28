@@ -2,208 +2,278 @@
 import requests
 from bs4 import BeautifulSoup
 import re
-from typing import List, Optional
-from urllib.parse import urljoin
-from app.config import settings
-from app.core.schemas import ReportDetails
-from pydantic import HttpUrl
+from typing import List, Optional, Dict, Tuple, Set
+from urllib.parse import urljoin, urlparse
 
-# --- Constantes ---
-TOREX_BASE_URL = "https://torexgold.com" # Para construir URLs absolutas si son relativas
+from config import settings
+from core import schemas 
+from pydantic import HttpUrl, ValidationError
 
-def _parse_report_name_details(report_name: str, report_url: str) -> Optional[schemas.ReportDetails]:
-    """
-    Intenta extraer año y trimestre del nombre del informe o URL.
-    Ejemplos de nombres:
-    "Torex Gold Reports First Quarter 2023 Results" -> 2023, Q1
-    "Torex Gold Announces Record Full Year and Fourth Quarter 2022 Financial Results" -> 2022, Q4 / FY
-    "TXG-Q3-2021-Financial-Statements.pdf" -> 2021, Q3
-    """
-    year_match = re.search(r'(20[2-9][0-9])', report_name + " " + report_url) # Años 2020-2099
-    if not year_match:
-        return None
-    year = int(year_match.group(1))
+TOREX_BASE_URL = "https://torexgold.com" 
 
-    quarter = "Unknown"
-    name_lower = report_name.lower()
-    url_lower = report_url.lower()
-    
-    # Buscar trimestres
-    if "first quarter" in name_lower or "q1" in name_lower or "-q1-" in url_lower or "_q1_" in url_lower:
-        quarter = "Q1"
-    elif "second quarter" in name_lower or "q2" in name_lower or "-q2-" in url_lower or "_q2_" in url_lower:
-        quarter = "Q2"
-    elif "third quarter" in name_lower or "q3" in name_lower or "-q3-" in url_lower or "_q3_" in url_lower:
-        quarter = "Q3"
-    elif "fourth quarter" in name_lower or "q4" in name_lower or "-q4-" in url_lower or "_q4_" in url_lower:
-        quarter = "Q4"
-    
-    # Buscar año completo (Full Year)
-    if "full year" in name_lower or "year-end" in name_lower or "annual report" in name_lower or "-fy-" in url_lower:
-        quarter = "FY" # Si es FY, podría haber también un Q4, priorizar FY si ambos están.
-        if "fourth quarter" in name_lower and "full year" in name_lower : # Si dice "Q4 and Full Year", es un informe de Q4 que también sirve de FY
-             quarter = "Q4" # O podríamos crear dos entradas, una para Q4 y otra para FY si el contenido lo justifica.
-                            # Para simplificar, si dice "Q4 and Full Year", lo tomamos como Q4, y el YTD será el anual.
-                            # O, si el informe es claramente un "Annual Report", entonces FY.
+# Tipos de documentos que queremos específicamente
+DOC_TYPE_MDA = "MDA"
+DOC_TYPE_FS = "FS" 
+DOC_TYPE_PRESENTATION = "PRESENTATION"
+DOC_TYPE_OTHER = "OTHER" # Para clasificación inicial si no es uno de los de arriba
 
-    # Si es un informe anual y no se detectó un trimestre específico, es FY.
-    # A veces los informes anuales no dicen "Q4".
-    if quarter == "Unknown" and ("annual" in name_lower or "year-end" in name_lower):
-        quarter = "FY"
-        
-    # Si aún es Unknown, intentar con expresiones regulares más genéricas sobre el nombre del PDF
-    if quarter == "Unknown":
-        q_match_url = re.search(r'[_-](q[1-4])[_-]', url_lower)
-        if q_match_url:
-            quarter = q_match_url.group(1).upper()
+# Mapeo de patrones a tipos de documentos y trimestres
+# Los patrones deben ser en minúsculas
+PATTERNS_FS = [
+    r"financial statement", r"\bfs\b", r"interim financial statements", 
+    r"consolidated financial statements", r"financials", r"financials.pdf"
+]
+PATTERNS_MDA = [
+    r"md&a", r"management discussion", r"management's discussion", r"mda.pdf"
+]
+PATTERNS_PRESENTATION = [
+    r"presentation", r"investor presentation", r"earnings call presentation",
+    # Asegurarse que sea de resultados si solo dice "presentation"
+    # Esto se refina más adelante con palabras clave de resultados
+]
 
-    if quarter == "Unknown":
-        print(f"Advertencia: No se pudo determinar el trimestre para: {report_name} ({report_url}). Se omite.")
-        return None # O marcar como "Unknown" y manejarlo después
+PATTERNS_Q1 = [r"first quarter", r"\bq1\b(?!\d)", r"[_-]q1[_-]", r"march 31", r"q1-\d{4}"]
+PATTERNS_Q2 = [r"second quarter", r"\bq2\b(?!\d)", r"[_-]q2[_-]", r"june 30", r"q2-\d{4}"]
+PATTERNS_Q3 = [r"third quarter", r"\bq3\b(?!\d)", r"[_-]q3[_-]", r"september 30", r"q3-\d{4}"]
+PATTERNS_Q4 = [r"fourth quarter", r"\bq4\b(?!\d)", r"[_-]q4[_-]", r"december 31", r"q4-\d{4}"]
+PATTERNS_FY = [r"full year", r"year-end", r"annual report", r"\bfy\b", r"[_-]fy[_-]", r"annual financial statements", r"annual mda"]
 
-    # Validar el URL
+
+def _is_valid_url(url_string: str) -> bool:
     try:
-        valid_url = HttpUrl(report_url)
-    except Exception:
-        print(f"Advertencia: URL inválido {report_url}. Se omite.")
+        HttpUrl(url_string)
+        return True
+    except ValidationError:
+        return False
+
+def _parse_report_name_details(report_name_from_link: str, report_url_str: str) -> Optional[Tuple[schemas.ReportDetails, str]]:
+    """
+    Intenta extraer año, trimestre y TIPO de documento.
+    Retorna una tupla: (ReportDetails, doc_type_string) o None si no es válido.
+    """
+    text_search_content = (report_name_from_link + " " + report_url_str).lower()
+
+    # 1. Determinar Año
+    year = None
+    year_match = re.search(r'(20[1-9][0-9])', text_search_content) 
+    if year_match:
+        year = int(year_match.group(1))
+    else:
+        return None # No se puede determinar el año, documento no válido para nuestros fines
+
+    # 2. Determinar Tipo de Documento
+    doc_type = DOC_TYPE_OTHER
+    if any(re.search(p, text_search_content) for p in PATTERNS_FS):
+        doc_type = DOC_TYPE_FS
+    elif any(re.search(p, text_search_content) for p in PATTERNS_MDA):
+        doc_type = DOC_TYPE_MDA
+    elif any(re.search(p, text_search_content) for p in PATTERNS_PRESENTATION):
+        # Para presentaciones, ser más estrictos: deben mencionar resultados o un trimestre/año
+        if "results" in text_search_content or \
+           "earnings" in text_search_content or \
+           "financial" in text_search_content or \
+           re.search(r"q[1-4]", text_search_content) or \
+           str(year) in text_search_content:
+            doc_type = DOC_TYPE_PRESENTATION
+    
+    if doc_type == DOC_TYPE_OTHER: # Si no es uno de los tipos principales, no nos interesa
         return None
 
-    return schemas.ReportDetails(
-        report_name=report_name.strip(),
-        report_url=valid_url,
+    # 3. Determinar Trimestre (Q1, Q2, Q3, Q4, o FY)
+    quarter = "Unknown"
+    is_fy_report = any(re.search(p, text_search_content) for p in PATTERNS_FY)
+    
+    found_q_specific = None
+    if any(re.search(p, text_search_content) for p in PATTERNS_Q1): found_q_specific = "Q1"
+    elif any(re.search(p, text_search_content) for p in PATTERNS_Q2): found_q_specific = "Q2"
+    elif any(re.search(p, text_search_content) for p in PATTERNS_Q3): found_q_specific = "Q3"
+    elif any(re.search(p, text_search_content) for p in PATTERNS_Q4): found_q_specific = "Q4"
+
+    if is_fy_report:
+        quarter = "FY" # Si es un informe anual explícito, lo marcamos como FY.
+                       # Los documentos de Q4 a menudo son también los anuales.
+                       # Si un documento es "Q4 y Anual", se clasificará como Q4 y luego como FY.
+                       # En este caso, para simplificar, si detecta FY, es FY.
+                       # Si detecta Q4 y también FY, priorizaremos FY si es FS o MDA anual.
+                       # Para el objetivo de 3 docs/trimestre, trataremos FY como un "super Q4".
+                       # El sitio de Torex lista "Fourth Quarter and Full-Year Report"
+                       # Para estos, los documentos FS, MDA, Pres son los de Q4/FY.
+        if found_q_specific == "Q4": # Es un Q4 que también es el anual
+            quarter = "Q4" # Lo tratamos como Q4, y se asumirá que contiene datos anuales.
+    elif found_q_specific:
+        quarter = found_q_specific
+    
+    if quarter == "Unknown":
+        return None # No se puede determinar el trimestre.
+
+    # Crear el objeto ReportDetails
+    try:
+        report_url_obj = HttpUrl(report_url_str)
+    except ValidationError:
+        return None
+
+    report_name = report_name_from_link.strip() if report_name_from_link else report_url_str.split('/')[-1]
+    
+    # Ajuste: Si es un Q4 y el nombre indica "Full-Year", reflejar esto en el nombre para claridad.
+    if quarter == "Q4" and is_fy_report and "full-year" not in report_name.lower() and "annual" not in report_name.lower():
+        report_name = f"{report_name} (FY {year})"
+
+
+    details = schemas.ReportDetails(
+        report_name=report_name,
+        report_url=report_url_obj,
         year=year,
-        quarter=quarter
+        quarter=quarter # Será Q1, Q2, Q3, Q4. El Q4 puede ser también el anual.
     )
+    return details, doc_type
 
 def fetch_financial_report_urls(start_year: int, end_year: int) -> List[schemas.ReportDetails]:
     """
-    Obtiene los URLs de los informes financieros de Torex Gold para un rango de años.
-    Intenta parsear el año y trimestre del nombre/URL del informe.
+    Obtiene URLs de informes financieros, intentando seleccionar FS, MD&A y Presentation por trimestre.
     """
-    report_details_list: List[schemas.ReportDetails] = []
+    all_candidate_reports_with_type: List[Tuple[schemas.ReportDetails, str]] = []
     try:
-        response = requests.get(settings.TOREX_REPORTS_URL, timeout=15)
-        response.raise_for_status() # Lanza una excepción para códigos de error HTTP
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(settings.TOREX_REPORTS_URL, timeout=30, headers=headers)
+        response.raise_for_status() 
     except requests.RequestException as e:
         print(f"Error al acceder a {settings.TOREX_REPORTS_URL}: {e}")
-        return report_details_list
+        return []
 
     soup = BeautifulSoup(response.content, 'html.parser')
-
-    # La estructura del sitio de Torex Gold puede cambiar.
-    # Esta es una suposición basada en una inspección típica de sitios de inversores.
-    # Se buscan enlaces (<a>) que contengan ".pdf" en su href y texto relacionado con informes.
-    
-    # Intenta encontrar secciones o divs que probablemente contengan los informes
-    # Esto es muy dependiente de la estructura actual del sitio.
-    # Ejemplo: buscar elementos que contengan 'Financial Statements', 'MD&A', 'Press Release'
-    # y luego dentro de ellos buscar los PDFs.
-
-    # Un enfoque más general: buscar todos los enlaces a PDF y luego filtrar por texto.
     links = soup.find_all('a', href=True)
-    
-    processed_urls = set()
+    processed_urls_in_initial_scan: Set[HttpUrl] = set()
 
     for link in links:
         href = link['href']
         link_text = link.get_text(strip=True)
 
         if not href.lower().endswith(".pdf"):
-            continue # Solo nos interesan los PDFs
+            continue 
 
-        # Construir URL absoluto si es relativo
-        absolute_url = urljoin(TOREX_BASE_URL, href)
+        parsed_href = urlparse(href)
+        if not parsed_href.scheme or not parsed_href.netloc: 
+            absolute_url_str = urljoin(settings.TOREX_REPORTS_URL, href) 
+        else:
+            absolute_url_str = href
         
-        if absolute_url in processed_urls:
+        if not _is_valid_url(absolute_url_str):
             continue
-        processed_urls.add(absolute_url)
-
-        # Filtrar por palabras clave en el texto del enlace o en el propio URL
-        # Palabras clave comunes: "Financial Statements", "MD&A", "Report", "Results", "Quarter", "Annual"
-        # También filtrar por el rango de años
-        # Este filtro es crucial y puede necesitar ajuste.
-        text_to_search = (link_text + " " + href).lower()
         
-        # Verificar si el texto del enlace o el URL contienen algún año del rango deseado
-        year_in_text = False
+        try: # Convertir a HttpUrl para el set y para evitar duplicados por normalización de Pydantic
+            abs_url_obj = HttpUrl(absolute_url_str)
+            if abs_url_obj in processed_urls_in_initial_scan:
+                continue
+            processed_urls_in_initial_scan.add(abs_url_obj)
+        except ValidationError:
+            continue # Ya se validó con _is_valid_url, pero por si acaso.
+        
+        # Filtro primario por año
+        year_in_link = False
         for year_to_check in range(start_year, end_year + 1):
-            if str(year_to_check) in text_to_search:
-                year_in_text = True
+            if str(year_to_check) in (link_text.lower() + " " + absolute_url_str.lower()):
+                year_in_link = True
                 break
-        
-        if not year_in_text:
-            continue # El año no está en el rango o no se menciona
-
-        # Palabras clave para identificar que es un informe financiero o de resultados
-        keywords = ["financial statement", "financial report", "results", "md&a", "management discussion", "earnings report"]
-        is_relevant_report = any(keyword in text_to_search for keyword in keywords)
-        
-        # Evitar PDFs genéricos como "presentation", "fact sheet" a menos que explícitamente digan "results"
-        negative_keywords = ["presentation", "fact sheet", "notice of meeting", "circular"]
-        if any(neg_keyword in text_to_search for neg_keyword in negative_keywords) and not "results" in text_to_search:
-            # Si es una presentación pero dice "Q1 Results Presentation", podría ser útil, pero por ahora lo excluimos
-            # para enfocarnos en los estados financieros formales.
-            # print(f"Omitiendo (posiblemente no es informe financiero principal): {link_text} ({absolute_url})")
+        if not year_in_link:
             continue
+        
+        parsed_info = _parse_report_name_details(link_text, absolute_url_str)
+        if parsed_info:
+            details, doc_type = parsed_info
+            # Solo considerar si el año está en rango y el tipo es uno de los deseados (FS, MDA, PRESENTATION)
+            if start_year <= details.year <= end_year and doc_type in [DOC_TYPE_FS, DOC_TYPE_MDA, DOC_TYPE_PRESENTATION]:
+                all_candidate_reports_with_type.append((details, doc_type))
 
-        if is_relevant_report:
-            details = _parse_report_name_details(link_text if link_text else href.split('/')[-1], absolute_url)
-            if details and start_year <= details.year <= end_year:
-                # Evitar duplicados por nombre, año y trimestre (aunque la URL ya es única)
-                is_duplicate = any(
-                    d.report_name == details.report_name and d.year == details.year and d.quarter == details.quarter 
-                    for d in report_details_list
-                )
-                if not is_duplicate:
-                    report_details_list.append(details)
-                    print(f"Informe encontrado: Año {details.year}, Trimestre {details.quarter}, Nombre: {details.report_name}, URL: {details.report_url}")
-                else:
-                    print(f"Informe duplicado (nombre/año/trimestre) omitido: {details.report_name}")
+    # Lógica de Selección: Para cada (año, trimestre), queremos 1 FS, 1 MD&A, 1 Presentación si existen.
+    # Usar un diccionario para almacenar los mejores candidatos por tipo para cada período.
+    # Clave: (year, quarter), Valor: { "FS": ReportDetails, "MDA": ReportDetails, "PRESENTATION": ReportDetails }
+    selected_reports_by_period: Dict[Tuple[int, str], Dict[str, schemas.ReportDetails]] = {}
 
-    print(f"Total de informes únicos parseados del sitio: {len(report_details_list)}")
-    # Podríamos ordenar los informes por año y trimestre
-    report_details_list.sort(key=lambda r: (r.year, r.quarter))
-    return report_details_list
+    # Ordenar candidatos para procesamiento predecible (ej. por nombre de informe, aunque URL debería ser único)
+    all_candidate_reports_with_type.sort(key=lambda x: (x[0].year, x[0].quarter, x[1], x[0].report_name))
+
+    for details, doc_type in all_candidate_reports_with_type:
+        period_key = (details.year, details.quarter)
+        
+        if period_key not in selected_reports_by_period:
+            selected_reports_by_period[period_key] = {}
+
+        # Si no tenemos ya un documento de este tipo para este período, o si este es "mejor" (no implementado, se toma el primero)
+        if doc_type not in selected_reports_by_period[period_key]:
+            selected_reports_by_period[period_key][doc_type] = details
+        # Aquí se podría añadir lógica si se encuentra un PDF "mejor" del mismo tipo (ej. no provisional)
+        # Por ahora, se toma el primero que se clasifica así para el período.
+
+    # Construir la lista final a partir de los seleccionados
+    final_list: List[schemas.ReportDetails] = []
+    added_urls_to_final: Set[HttpUrl] = set() # Para asegurar URLs únicas en la salida final
+
+    sorted_periods_for_output = sorted(selected_reports_by_period.keys())
+
+    for period_key in sorted_periods_for_output:
+        docs_for_period = selected_reports_by_period[period_key]
+        
+        if DOC_TYPE_FS in docs_for_period:
+            report = docs_for_period[DOC_TYPE_FS]
+            if report.report_url not in added_urls_to_final:
+                final_list.append(report)
+                added_urls_to_final.add(report.report_url)
+        
+        if DOC_TYPE_MDA in docs_for_period:
+            report = docs_for_period[DOC_TYPE_MDA]
+            if report.report_url not in added_urls_to_final:
+                final_list.append(report)
+                added_urls_to_final.add(report.report_url)
+
+        if DOC_TYPE_PRESENTATION in docs_for_period:
+            report = docs_for_period[DOC_TYPE_PRESENTATION]
+            if report.report_url not in added_urls_to_final:
+                final_list.append(report)
+                added_urls_to_final.add(report.report_url)
+                
+    final_list.sort(key=lambda r: (r.year, r.quarter, r.report_name))
+    
+    print(f"Fetcher (Altamente Selectivo): Total de informes seleccionados: {len(final_list)}")
+    # for r in final_list:
+    #     print(f"  - {r.year} {r.quarter} - {r.report_name} ({r.report_url})")
+    return final_list
 
 
 def download_pdf_content(report_url: str) -> Optional[bytes]:
-    """
-    Descarga el contenido de un PDF desde una URL.
-    """
     try:
-        response = requests.get(report_url, timeout=30) # Timeout más largo para PDFs
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(report_url, timeout=45, headers=headers, allow_redirects=True) 
         response.raise_for_status()
-        if 'application/pdf' in response.headers.get('Content-Type', '').lower():
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'application/pdf' in content_type:
+            if len(response.content) < 1000: 
+                print(f"Warning: PDF at {report_url} is very small ({len(response.content)} bytes). May be invalid or empty.")
             return response.content
         else:
-            print(f"Error: El contenido de {report_url} no es un PDF. Content-Type: {response.headers.get('Content-Type')}")
+            print(f"Error: El contenido de {report_url} no es un PDF. Content-Type: {content_type}")
             return None
-    except requests.RequestException as e:
+    except requests.exceptions.Timeout:
+        print(f"Error: Timeout al descargar el PDF {report_url}")
+        return None
+    except requests.exceptions.RequestException as e:
         print(f"Error al descargar el PDF {report_url}: {e}")
         return None
 
-# Ejemplo de uso (para pruebas locales)
-if __name__ == "__main__":
-    print(f"Buscando informes entre {settings.START_YEAR} y {settings.END_YEAR} en {settings.TOREX_REPORTS_URL}")
+if __name__ == "__main__": # Para pruebas locales
+    print(f"Probando fetcher altamente selectivo para años: {settings.START_YEAR} a {settings.END_YEAR}")
     found_reports = fetch_financial_report_urls(start_year=settings.START_YEAR, end_year=settings.END_YEAR)
     if found_reports:
-        print(f"\n--- Informes Encontrados ({len(found_reports)}) ---")
-        for rep in found_reports:
-            print(f"Año: {rep.year}, Trimestre: {rep.quarter}, Nombre: {rep.report_name}, URL: {rep.report_url}")
+        print(f"\n--- Informes Seleccionados ({len(found_reports)}) ---")
+        # Contar por año y trimestre
+        from collections import Counter
+        counts_per_period = Counter((r.year, r.quarter) for r in found_reports)
+        for period, count in sorted(counts_per_period.items()):
+            print(f"Periodo: {period[0]}-{period[1]}, Documentos: {count}")
+
+        print("\nDetalle:")
+        for rep_idx, rep in enumerate(found_reports):
+            print(f"{rep_idx+1}. Año: {rep.year}, Trimestre: {rep.quarter}, Nombre: {rep.report_name}, URL: {rep.report_url}")
         
-        # Probar descarga de un PDF
-        # if len(found_reports) > 0:
-        #     print(f"\nIntentando descargar: {found_reports[0].report_url}")
-        #     pdf_bytes = download_pdf_content(str(found_reports[0].report_url))
-        #     if pdf_bytes:
-        #         print(f"PDF descargado, tamaño: {len(pdf_bytes)} bytes.")
-        #         # Guardar para inspección (opcional)
-        #         # with open("test_report.pdf", "wb") as f:
-        #         #     f.write(pdf_bytes)
-        #         # print("PDF guardado como test_report.pdf")
-        #     else:
-        #         print("Fallo al descargar el PDF.")
-
+        # ... (código de prueba de descarga opcional) ...
     else:
-        print("No se encontraron informes.")
-
+        print("No se encontraron informes con los criterios altamente selectivos.")
