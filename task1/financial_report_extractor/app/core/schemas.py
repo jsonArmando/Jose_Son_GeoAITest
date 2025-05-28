@@ -1,7 +1,6 @@
 # app/core/schemas.py
-from pydantic import BaseModel, Field, HttpUrl, ConfigDict
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict # ESTA LÍNEA DEBE COMENZAR EN LA COLUMNA 1
 from typing import List, Optional, Union, Dict, Any
-# from datetime import datetime # Descomentar si se añaden campos de fecha/hora directamente desde la DB
 
 # --- Modelos para la API (Peticiones y Respuestas) ---
 
@@ -14,15 +13,15 @@ class TriggerExtractionResponse(BaseModel):
     reports_identified_count: int
     report_urls_found: List[HttpUrl] = []
 
-class MetricItem(BaseModel):
+class MetricItem(BaseModel): 
     metric_name: str
-    quarter_value: Union[str, float, None] = Field(description="Valor del trimestre. 'Not found' o numérico.")
-    ytd_value: Union[str, float, None] = Field(description="Valor acumulado del año. 'Not found' o numérico.")
+    quarter_value: Optional[str] = None 
+    ytd_value: Optional[str] = None
 
 class ExtractedReportDataResponse(BaseModel):
     id: int 
     report_name: str
-    report_url: HttpUrl # Pydantic validará si el string de la DB es un HttpUrl válido
+    report_url: HttpUrl 
     year: int
     quarter: str 
     extraction_status: str 
@@ -54,40 +53,39 @@ class AllReportsSummaryResponse(BaseModel):
 
 # --- Modelos internos para el flujo de datos (Dominio) ---
 
-class ReportDetails(BaseModel): # Usado para pasar info al LLM y estandarizar
+class ReportDetails(BaseModel): 
     report_name: str
-    report_url: HttpUrl # Espera HttpUrl al ser creado
+    report_url: HttpUrl 
     year: int
     quarter: str 
 
 class LLMExtractionInput(BaseModel):
     pdf_content_text: str 
 
-class LLMOperationalHighlight(BaseModel):
+class LLMOperationalHighlight(BaseModel): 
     metric_name: str
-    quarter_value: str # El LLM devuelve string, luego se puede intentar convertir/validar
-    ytd_value: str
+    quarter_value: Union[str, int, float, None] = Field(default=None)
+    ytd_value: Union[str, int, float, None] = Field(default=None)
 
-class LLMFinancialHighlight(BaseModel):
+class LLMFinancialHighlight(BaseModel): 
     metric_name: str
-    quarter_value: str
-    ytd_value: str
+    quarter_value: Union[str, int, float, None] = Field(default=None)
+    ytd_value: Union[str, int, float, None] = Field(default=None)
 
-class LLMReportDetailsInferred(BaseModel): # Sub-modelo para los detalles inferidos por el LLM
+class LLMReportDetailsInferred(BaseModel): 
     year: Union[int, str, None] = Field(None, description="Año inferido por el LLM, puede ser string o int")
     quarter: Optional[str] = Field(None, description="Trimestre (Q1-Q4, FY) inferido por el LLM")
 
-class LLMFullExtractionResult(BaseModel): # Este es el modelo clave para la respuesta del LLM
+class LLMFullExtractionResult(BaseModel): 
     report_details_inferred: Optional[LLMReportDetailsInferred] = Field(None, description="Año y trimestre inferidos por el LLM")
     operational_highlights: List[LLMOperationalHighlight] = []
-    financial_highlights: List[LLMFinancialHighlight] = []
+    financial_highlights: List[LLMFinancialHighlight] = []   
     llm_extraction_notes: Optional[str] = None
-    # llm_confidence_score: Optional[float] = Field(None, ge=0, le=1) # Opcional
 
 class StandardizedExtractionOutput(BaseModel):
-    report_details: ReportDetails # report_url aquí es HttpUrl
-    operational_highlights: List[MetricItem]
-    financial_highlights: List[MetricItem]
+    report_details: ReportDetails 
+    operational_highlights: List[MetricItem] 
+    financial_highlights: List[MetricItem] 
     accuracy_score: float
     raw_llm_output: Dict[str, Any] 
 
@@ -105,10 +103,10 @@ class AnnualReportTableResponse(BaseModel):
     operational_table: List[TableRow]
     financial_table: List[TableRow]
 
-# --- Modelos Pydantic para validación de datos de la DB (opcional, pero bueno para consistencia) ---
+# --- Modelos Pydantic para validación de datos de la DB ---
 class FinancialReportDBBase(BaseModel):
     report_name: str
-    report_url: HttpUrl # Espera HttpUrl
+    report_url: HttpUrl 
     year: int
     quarter: str
     extraction_status: str = "PENDING"
@@ -135,3 +133,4 @@ class MetricDBCreate(MetricDBBase):
 class MetricDB(MetricDBBase):
     id: int
     model_config = ConfigDict(from_attributes=True)
+    

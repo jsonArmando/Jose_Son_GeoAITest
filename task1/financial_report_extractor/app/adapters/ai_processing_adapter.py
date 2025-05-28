@@ -1,215 +1,253 @@
-# app/adapters/ai_processing_adapter.py
+# app/adapters/ai_processing_adapter.py - VERSIÓN MEJORADA CON DIAGNÓSTICO
 import google.generativeai as genai
-from config import settings
-from core import ai_prompts, schemas
+import PyPDF2 
+import io
 import json
 from typing import Optional, Tuple, Dict, Any
-import PyPDF2 # Para extraer texto de PDFs
-import io
+import traceback
+import time
+import logging
 
-# --- Configuración del SDK de Gemini ---
+from config import settings
+from core import ai_prompts, schemas
+
+# Configurar logging específico para este módulo
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 try:
     if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "YOUR_GEMINI_API_KEY_HERE":
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        # Modelo para generación de texto y análisis.
-        # 'gemini-pro' es bueno para tareas de texto.
-        # 'gemini-1.5-flash' o 'gemini-1.5-pro' si se necesita mayor capacidad o multimodalidad (no usado aquí directamente para PDF)
-        # Para esta tarea, gemini-1.5-flash es una buena opción por velocidad y costo-efectividad.
-        text_generation_model = genai.GenerativeModel('gemini-1.5-flash')
+        text_generation_model = genai.GenerativeModel('gemini-2.0-flash')
+        logger.info("Gemini SDK configurado con gemini-2.0-flash.")
     else:
-        print("ADVERTENCIA: GEMINI_API_KEY no está configurada. El adaptador AI no funcionará.")
+        logger.error("GEMINI_API_KEY no está configurada. El adaptador AI no funcionará.")
         text_generation_model = None
 except Exception as e:
-    print(f"Error al configurar Gemini SDK: {e}")
+    logger.error(f"Error al configurar Gemini SDK: {e}")
     text_generation_model = None
 
 def _extract_text_from_pdf_bytes(pdf_bytes: bytes) -> Optional[str]:
-    """
-    Extrae texto de un objeto de bytes de PDF usando PyPDF2.
-    """
+    """Extrae texto de bytes PDF usando PyPDF2"""
     try:
         pdf_file_reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
-        text = []
+        if pdf_file_reader.is_encrypted:
+            try:
+                pdf_file_reader.decrypt('')
+            except Exception as decrypt_err:
+                logger.error(f"PDF está encriptado y no se pudo desencriptar: {decrypt_err}")
+                return None
+
+        text_parts = []
         for page_num in range(len(pdf_file_reader.pages)):
             page = pdf_file_reader.pages[page_num]
-            text.append(page.extract_text())
-        return "\n".join(text)
-    except Exception as e:
-        print(f"Error al extraer texto del PDF con PyPDF2: {e}")
+            page_text = page.extract_text()
+            if page_text: 
+                text_parts.append(page_text)
+        
+        if not text_parts:
+            logger.warning("PyPDF2 no pudo extraer texto del PDF")
+            return None 
+        
+        full_text = "\n".join(text_parts)
+        logger.info(f"Texto extraído exitosamente: {len(full_text)} caracteres, {len(text_parts)} páginas")
+        return full_text
+        
+    except PyPDF2.errors.PdfReadError as e:
+        logger.error(f"Error de PyPDF2 al leer el PDF: {e}")
+        return None
+    except Exception as e: 
+        logger.error(f"Error genérico al extraer texto del PDF: {e}")
         return None
 
-def _call_gemini_api(prompt: str) -> Optional[str]:
-    """
-    Función genérica para llamar a la API de Gemini con un prompt.
-    """
+def _call_gemini_api_with_retry(prompt: str, expect_json: bool = False, max_retries: int = 3) -> Optional[str]:
+    """Llama a la API de Gemini con reintentos y diagnóstico mejorado"""
+    
     if not text_generation_model:
-        print("Error: Modelo Gemini no inicializado.")
+        logger.error("Modelo Gemini no inicializado - verificar API Key")
         return None
-    try:
-        # Para JSON mode, se puede especificar en generation_config
-        # response = text_generation_model.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
-        # Por ahora, parsearemos el JSON de la respuesta de texto.
-        
-        # Usando la nueva API para gemini-1.5-flash (o pro)
-        chat_history = [{"role": "user", "parts": [{"text": prompt}]}]
-        payload = {"contents": chat_history}
-        
-        # Nota: La API v1beta (usada en las instrucciones originales) es para gemini-pro.
-        # Para gemini-1.5-flash, el SDK maneja la llamada directa.
-        # Si se usara fetch directamente:
-        # apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={settings.GEMINI_API_KEY}"
-        # response = requests.post(apiUrl, json=payload)
-        # result = response.json()
-        # text_response = result.get('candidates')[0].get('content').get('parts')[0].get('text')
-        
-        response = text_generation_model.generate_content(prompt)
-
-        if response.candidates and len(response.candidates) > 0:
-            if response.candidates[0].content and response.candidates[0].content.parts:
-                 # Asegurarse que no haya errores de "block reason"
-                if response.candidates[0].finish_reason.name != "STOP":
-                    block_reason = response.candidates[0].finish_reason.name
-                    safety_ratings_info = response.candidates[0].safety_ratings
-                    print(f"Advertencia: La generación de Gemini fue bloqueada o no completó. Razón: {block_reason}")
-                    print(f"Safety Ratings: {safety_ratings_info}")
-                    # Si hay prompt_feedback, también es útil
-                    if response.prompt_feedback and response.prompt_feedback.block_reason:
-                        print(f"Prompt Feedback Block Reason: {response.prompt_feedback.block_reason_message}")
-                    return f'{{"error": "Gemini generation blocked or incomplete", "reason": "{block_reason}"}}'
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Intento {attempt + 1}/{max_retries} - Enviando prompt a Gemini (longitud: {len(prompt)} chars)")
+            
+            # Configuración de generación
+            generation_config = genai.types.GenerationConfig(
+                temperature=0.1,
+                max_output_tokens=8192,  # Límite explícito para evitar respuestas truncadas
+            )
+            
+            # Llamada a la API con timeout
+            start_time = time.time()
+            response = text_generation_model.generate_content(
+                prompt,
+                generation_config=generation_config,
+                request_options={'timeout': 400}
+            )
+            end_time = time.time()
+            
+            logger.info(f"Respuesta recibida en {end_time - start_time:.2f} segundos")
+            
+            # Diagnóstico detallado de la respuesta
+            logger.debug("=== DIAGNÓSTICO DE RESPUESTA GEMINI ===")
+            logger.debug(f"Tipo de respuesta: {type(response)}")
+            logger.debug(f"Prompt feedback: {response.prompt_feedback}")
+            
+            # Verificar si hay candidatos
+            if not response.candidates or len(response.candidates) == 0:
+                logger.error("❌ No hay candidatos en la respuesta")
+                if response.prompt_feedback:
+                    if hasattr(response.prompt_feedback, 'block_reason') and response.prompt_feedback.block_reason:
+                        block_reason = response.prompt_feedback.block_reason.name
+                        logger.error(f"Prompt bloqueado por: {block_reason}")
+                        
+                        # Si es un bloqueo de seguridad, no reintentamos
+                        if 'SAFETY' in block_reason:
+                            return f'{{"error": "Safety block", "reason": "{block_reason}"}}' if expect_json else None
                 
-                return response.candidates[0].content.parts[0].text
-            else: # A veces la respuesta puede estar vacía o mal formada si hay un problema
-                print("Advertencia: Respuesta de Gemini no tiene 'content' o 'parts' esperados.")
-                print(f"Respuesta completa de Gemini: {response}")
+                # Reintentar si no es un bloqueo permanente
+                if attempt < max_retries - 1:
+                    logger.info("Reintentando en 2 segundos...")
+                    time.sleep(2)
+                    continue
                 return None
-        else:
-            print("Advertencia: Respuesta de Gemini no tiene candidatos válidos.")
-            # Imprimir feedback del prompt si está disponible, puede indicar por qué falló (ej. API key inválida)
-            if response.prompt_feedback:
-                print(f"Prompt Feedback: {response.prompt_feedback}")
-            return None
-
-    except Exception as e:
-        print(f"Error al llamar a la API de Gemini: {e}")
-        # Imprimir detalles de la excepción, podría ser un error de autenticación, cuota, etc.
-        if hasattr(e, 'response') and e.response:
-            print(f"Detalles del error de API: {e.response.text}")
-        return None
+            
+            # Examinar el primer candidato
+            candidate = response.candidates[0]
+            logger.debug(f"Finish reason: {candidate.finish_reason}")
+            logger.debug(f"Safety ratings: {candidate.safety_ratings}")
+            
+            # Verificar razón de finalización
+            if candidate.finish_reason.name not in ["STOP", "MAX_TOKENS"]:
+                block_reason = candidate.finish_reason.name
+                logger.warning(f"Generación no completó normalmente: {block_reason}")
+                
+                # Para algunos errores, podemos reintentar
+                if block_reason in ["RECITATION", "OTHER"] and attempt < max_retries - 1:
+                    logger.info("Reintentando por razón de finalización...")
+                    time.sleep(2)
+                    continue
+                
+                return f'{{"error": "Generation issue", "reason": "{block_reason}"}}' if expect_json else None
+            
+            # Verificar contenido
+            if not candidate.content or not candidate.content.parts:
+                logger.error("❌ Candidato sin contenido o partes")
+                if attempt < max_retries - 1:
+                    logger.info("Reintentando por falta de contenido...")
+                    time.sleep(2)
+                    continue
+                return None
+            
+            # Extraer texto
+            content_text = candidate.content.parts[0].text.strip()
+            logger.info(f"✅ Contenido extraído exitosamente: {len(content_text)} caracteres")
+            logger.debug(f"Primeros 500 caracteres: {content_text[:500]}")
+            
+            return content_text
+            
+        except Exception as e:
+            logger.error(f"❌ Excepción en intento {attempt + 1}: {e}")
+            if hasattr(e, 'grpc_status_code'):
+                logger.error(f"gRPC status code: {e.grpc_status_code}")
+            
+            # Para ciertos errores, no reintentamos
+            if "quota" in str(e).lower() or "api key" in str(e).lower():
+                logger.error("Error de quota o API key - no reintentando")
+                return None
+            
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2  # Backoff exponencial
+                logger.info(f"Esperando {wait_time} segundos antes del siguiente intento...")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"Todos los intentos fallaron. Último error: {traceback.format_exc()}")
+    
+    return None
 
 def process_pdf_with_ai(pdf_bytes: bytes, report_name: str) -> Tuple[Optional[schemas.LLMFullExtractionResult], Optional[Dict[str, Any]], Optional[str]]:
-    """
-    Procesa un PDF usando un pipeline de dos pasos con LLMs:
-    1. Extrae texto del PDF.
-    2. (Opcional Primer LLM Call) Pide al LLM que estructure el texto del PDF (identificar periodo, tablas, etc.).
-       Para simplificar, podríamos omitir este y pasar texto crudo al siguiente.
-       Pero para robustez, este paso es bueno.
-    3. Pide al LLM que extraiga las métricas específicas del texto (estructurado o crudo).
-
-    Retorna:
-        - Objeto LLMFullExtractionResult si tiene éxito.
-        - Diccionario con la respuesta cruda del LLM de extracción de métricas.
-        - Mensaje de error si algo falla.
-    """
-    # Paso 1: Extraer texto del PDF
+    """Procesa PDF con AI incluyendo diagnóstico mejorado"""
+    
+    logger.info(f"=== INICIANDO PROCESAMIENTO AI PARA: {report_name} ===")
+    
+    # 1. Extraer texto del PDF
+    logger.info("Paso 1: Extrayendo texto del PDF...")
     pdf_text_content = _extract_text_from_pdf_bytes(pdf_bytes)
     if not pdf_text_content:
-        return None, None, "Fallo al extraer texto del PDF."
+        error_msg = "Fallo crítico al extraer texto del PDF (PyPDF2 no pudo extraer contenido legible)."
+        logger.error(error_msg)
+        return None, None, error_msg
     
-    # (Opcional) Podríamos truncar el texto si es demasiado largo para el LLM,
-    # pero los modelos más nuevos como Gemini 1.5 tienen contextos muy grandes.
-    # print(f"Texto extraído del PDF (primeros 1000 caracteres): {pdf_text_content[:1000]}")
-
-    # Paso 2: (Opcional, pero recomendado) Usar LLM para estructurar el contenido del PDF
-    # Por ahora, para mantenerlo más simple y directo según la reducción solicitada,
-    # vamos a pasar el texto crudo directamente al prompt de extracción de métricas.
-    # Si los resultados no son buenos, este paso de pre-procesamiento con LLM sería lo primero a añadir.
-    # prompt_estructurador = ai_prompts.get_pdf_structure_extraction_prompt(pdf_text_content)
-    # structured_content_json_str = _call_gemini_api(prompt_estructurador)
-    # if not structured_content_json_str:
-    #     return None, None, "Fallo en el LLM al estructurar el contenido del PDF."
-    # print(f"Contenido estructurado por LLM (primeros 500 chars): {structured_content_json_str[:500]}")
-    # structured_content_for_metric_extraction = structured_content_json_str
-    
-    # Usaremos el texto crudo directamente para la extracción de métricas por simplicidad inicial
-    # Si el texto es muy largo, podríamos necesitar dividirlo o usar un modelo con ventana de contexto mayor.
-    # Gemini 1.5 Flash tiene 1M de tokens, debería ser suficiente para la mayoría de los informes.
-    MAX_TEXT_LENGTH_FOR_PROMPT = 750000 # Ajustar según el límite real del modelo y para evitar timeouts/costos excesivos
+    # 2. Truncar texto si es necesario
+    MAX_TEXT_LENGTH_FOR_PROMPT = 750000 
     if len(pdf_text_content) > MAX_TEXT_LENGTH_FOR_PROMPT:
-        print(f"Advertencia: El texto del PDF ({len(pdf_text_content)} chars) es muy largo, truncando a {MAX_TEXT_LENGTH_FOR_PROMPT} chars para el prompt.")
+        logger.warning(f"Texto del PDF ({len(pdf_text_content)} chars) truncado a {MAX_TEXT_LENGTH_FOR_PROMPT} chars")
         pdf_text_content_for_prompt = pdf_text_content[:MAX_TEXT_LENGTH_FOR_PROMPT]
     else:
         pdf_text_content_for_prompt = pdf_text_content
-
-    # Paso 3: Usar LLM para extraer las métricas específicas
-    metric_extraction_prompt = ai_prompts.get_metric_extraction_prompt(pdf_text_content_for_prompt, report_name)
     
-    print(f"\n--- Enviando prompt de extracción de métricas a Gemini para: {report_name} ---")
-    # print(f"Prompt (primeros 300 chars): {metric_extraction_prompt[:300]} ... (longitud total: {len(metric_extraction_prompt)})")
-
-    raw_llm_metric_response_str = _call_gemini_api(metric_extraction_prompt)
+    # 3. Generar prompt
+    logger.info("Paso 2: Generando prompt de extracción...")
+    metric_extraction_prompt = ai_prompts.get_metric_extraction_prompt(pdf_text_content_for_prompt, report_name)
+    logger.debug(f"Longitud del prompt: {len(metric_extraction_prompt)} caracteres")
+    
+    # 4. Llamar a Gemini API
+    logger.info("Paso 3: Llamando a Gemini API...")
+    raw_llm_metric_response_str = _call_gemini_api_with_retry(metric_extraction_prompt, expect_json=True)
 
     if not raw_llm_metric_response_str:
-        return None, None, "Fallo en la API de Gemini durante la extracción de métricas (respuesta vacía)."
+        error_msg = "Fallo en la API de Gemini durante la extracción de métricas (respuesta vacía o error de API irrecuperable)."
+        logger.error(error_msg)
+        return None, None, error_msg
 
-    # print(f"\nRespuesta cruda del LLM para extracción de métricas:\n{raw_llm_metric_response_str}\n---")
+    # 5. Procesar respuesta JSON
+    logger.info("Paso 4: Procesando respuesta JSON...")
+    logger.debug(f"Respuesta cruda (primeros 1000 chars): {raw_llm_metric_response_str[:1000]}")
+
+    # Limpiar formato markdown si existe
+    cleaned_json_str = raw_llm_metric_response_str
+    if cleaned_json_str.startswith("```json"):
+        cleaned_json_str = cleaned_json_str[7:]
+        if cleaned_json_str.endswith("```"):
+            cleaned_json_str = cleaned_json_str[:-3]
+    cleaned_json_str = cleaned_json_str.strip()
 
     try:
-        # El LLM debería devolver un JSON string. Intentar parsearlo.
-        # A veces los LLMs pueden añadir ```json ... ``` o texto explicativo. Intentar limpiarlo.
-        if raw_llm_metric_response_str.strip().startswith("```json"):
-            raw_llm_metric_response_str = raw_llm_metric_response_str.strip()[7:]
-            if raw_llm_metric_response_str.strip().endswith("```"):
-                 raw_llm_metric_response_str = raw_llm_metric_response_str.strip()[:-3]
-        
-        raw_llm_metric_data = json.loads(raw_llm_metric_response_str)
+        # Parsear JSON
+        raw_llm_metric_data = json.loads(cleaned_json_str)
+        logger.info("JSON parseado exitosamente")
 
-        # Validar con Pydantic si la estructura es la esperada
-        # Esto ayuda a asegurar que el LLM está siguiendo el formato de prompt
+        # Verificar si hay error en la respuesta
+        if isinstance(raw_llm_metric_data, dict) and "error" in raw_llm_metric_data:
+            error_detail = raw_llm_metric_data.get('reason', 'Error desconocido devuelto por LLM')
+            logger.error(f"LLM devolvió error: {error_detail}")
+            return None, raw_llm_metric_data, f"LLM error: {error_detail}"
+        
+        # Validar con Pydantic
+        logger.info("Validando datos con Pydantic...")
         llm_result = schemas.LLMFullExtractionResult(**raw_llm_metric_data)
-        return llm_result, raw_llm_metric_data, None # Éxito
+        logger.info("✅ Validación exitosa con Pydantic")
+        
+        return llm_result, raw_llm_metric_data, None 
 
     except json.JSONDecodeError as e:
-        error_msg = f"Error al decodificar JSON de la respuesta del LLM para métricas: {e}. Respuesta recibida: {raw_llm_metric_response_str[:500]}..."
-        print(error_msg)
-        return None, {"raw_response_on_json_error": raw_llm_metric_response_str}, error_msg
-    except Exception as e: # Captura errores de validación Pydantic u otros
-        error_msg = f"Error al procesar/validar la respuesta del LLM para métricas: {e}. Data: {raw_llm_metric_response_str[:500]}..."
-        print(error_msg)
-        # Guardar la respuesta cruda para análisis si falla la validación Pydantic
-        # Esto es útil si el LLM no sigue exactamente el schema de LLMFullExtractionResult
-        # pero aun así devuelve un JSON.
-        try:
-            raw_data_on_validation_error = json.loads(raw_llm_metric_response_str)
-        except:
-            raw_data_on_validation_error = {"raw_response_on_validation_error": raw_llm_metric_response_str}
-        return None, raw_data_on_validation_error, error_msg
-
-
-# Ejemplo de uso (para pruebas locales)
-if __name__ == "__main__":
-    # Esto requeriría un PDF de ejemplo en bytes.
-    # Supongamos que tenemos 'test_report.pdf' descargado por report_fetcher_adapter.py
-    try:
-        with open("test_report.pdf", "rb") as f:
-            sample_pdf_bytes = f.read()
+        error_msg = f"Error al decodificar JSON: {e}"
+        logger.error(f"{error_msg}\nRespuesta problemática:\n{cleaned_json_str}")
+        return None, {"raw_response_on_json_error": cleaned_json_str}, f"JSONDecodeError: {str(e)}"
         
-        print("Probando procesamiento AI del PDF de ejemplo (test_report.pdf)...")
-        extracted_result, raw_output, error = process_pdf_with_ai(sample_pdf_bytes, "Test Report Q1 2023")
+    except Exception as e: 
+        error_msg = f"Error al procesar/validar respuesta del LLM: {e}"
+        logger.error(f"{error_msg}\n{traceback.format_exc()}")
+        
+        raw_data_dict_on_error = {}
+        try: 
+            raw_data_dict_on_error = json.loads(cleaned_json_str)
+        except: 
+            raw_data_dict_on_error = {"raw_response_on_validation_error": cleaned_json_str}
+        
+        return None, raw_data_dict_on_error, error_msg
 
-        if error:
-            print(f"\nError en el procesamiento AI: {error}")
-            if raw_output:
-                 print(f"Salida cruda del LLM (en error): {json.dumps(raw_output, indent=2)}")
-        elif extracted_result:
-            print("\n--- Resultado de Extracción AI (Validado por Pydantic) ---")
-            print(extracted_result.model_dump_json(indent=2))
-            print("\n--- Salida Cruda del LLM (JSON) ---")
-            print(json.dumps(raw_output, indent=2))
-        else:
-            print("\nNo se obtuvo resultado ni error específico del procesamiento AI.")
-
-    except FileNotFoundError:
-        print("Archivo 'test_report.pdf' no encontrado. Ejecuta report_fetcher_adapter.py primero para descargarlo o coloca un PDF de prueba.")
-    except Exception as e:
-        print(f"Ocurrió un error en la prueba: {e}")
-
+# Función original para compatibilidad
+def _call_gemini_api(prompt: str, expect_json: bool = False) -> Optional[str]:
+    """Wrapper para mantener compatibilidad con código existente"""
+    return _call_gemini_api_with_retry(prompt, expect_json, max_retries=3)
