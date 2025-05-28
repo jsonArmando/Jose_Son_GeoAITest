@@ -1,0 +1,289 @@
+# Fixed Docker Compose Configuration
+# Removed obsolete version and fixed container naming conflicts
+
+services:
+  # === DATABASE SERVICES ===
+  postgres:
+    image: postgres:15-alpine
+    container_name: financial_extractor_db
+    environment:
+      POSTGRES_DB: financial_reports
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - financial_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # === CACHE & SESSION STORE ===
+  redis:
+    image: redis:7-alpine
+    container_name: financial_extractor_redis
+    command: redis-server --appendonly yes --requirepass redis123
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - financial_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # === OBJECT STORAGE ===
+  minio:
+    image: minio/minio:latest
+    container_name: financial_extractor_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    volumes:
+      - minio_data:/data
+    networks:
+      - financial_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # === MESSAGE BROKER ===
+  rabbitmq:
+    image: rabbitmq:3.11-management-alpine
+    container_name: financial_extractor_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbitmq
+      RABBITMQ_DEFAULT_PASS: rabbitmq123
+    ports:
+      - "5672:5672"  # AMQP
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - financial_network
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+
+  # === SELENIUM GRID ===
+  selenium-hub:
+    image: selenium/hub:4.15.0
+    container_name: financial_extractor_selenium_hub
+    ports:
+      - "4444:4444"
+    environment:
+      - GRID_MAX_SESSION=5
+      - GRID_BROWSER_TIMEOUT=300
+      - GRID_TIMEOUT=300
+    networks:
+      - financial_network
+
+  selenium-chrome:
+    image: selenium/node-chrome:4.15.0
+    depends_on:
+      - selenium-hub
+    environment:
+      - HUB_HOST=selenium-hub
+      - HUB_PORT=4444
+      - NODE_MAX_INSTANCES=2
+      - NODE_MAX_SESSION=2
+    volumes:
+      - /dev/shm:/dev/shm
+    networks:
+      - financial_network
+    deploy:
+      replicas: 2
+
+  # === MONITORING ===
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: financial_extractor_prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - financial_network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: financial_extractor_grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - financial_network
+
+  # === MAIN APPLICATION (Development Mode) ===
+  financial-extractor-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: financial_extractor_api_dev
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/financial_reports
+      - REDIS_URL=redis://:redis123@redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - RABBITMQ_URL=amqp://rabbitmq:rabbitmq123@rabbitmq:5672/
+      - SELENIUM_HUB_URL=http://selenium-hub:4444/wd/hub
+      - LOG_LEVEL=INFO
+      - ENVIRONMENT=development
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-api-key-here}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-your-anthropic-api-key-here}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src:ro
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      selenium-hub:
+        condition: service_started
+    networks:
+      - financial_network
+    restart: unless-stopped
+    command: uvicorn src.adapters.web.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # === BACKGROUND WORKERS (without scale conflict) ===
+  celery-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: financial_extractor_worker_1
+    command: celery -A src.infrastructure.messaging.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/financial_reports
+      - REDIS_URL=redis://:redis123@redis:6379/0
+      - RABBITMQ_URL=amqp://rabbitmq:rabbitmq123@rabbitmq:5672/
+      - SELENIUM_HUB_URL=http://selenium-hub:4444/wd/hub
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-api-key-here}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-your-anthropic-api-key-here}
+    volumes:
+      - ./src:/app/src:ro
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - financial_network
+    restart: unless-stopped
+
+  celery-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile  
+      target: development
+    container_name: financial_extractor_worker_2
+    command: celery -A src.infrastructure.messaging.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/financial_reports
+      - REDIS_URL=redis://:redis123@redis:6379/0
+      - RABBITMQ_URL=amqp://rabbitmq:rabbitmq123@rabbitmq:5672/
+      - SELENIUM_HUB_URL=http://selenium-hub:4444/wd/hub
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-api-key-here}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-your-anthropic-api-key-here}
+    volumes:
+      - ./src:/app/src:ro
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - financial_network
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: financial_extractor_scheduler
+    command: celery -A src.infrastructure.messaging.celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/financial_reports
+      - REDIS_URL=redis://:redis123@redis:6379/0
+      - RABBITMQ_URL=amqp://rabbitmq:rabbitmq123@rabbitmq:5672/
+    volumes:
+      - ./src:/app/src:ro
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - financial_network
+    restart: unless-stopped
+
+# === VOLUMES ===
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# === NETWORKS ===
+networks:
+  financial_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
