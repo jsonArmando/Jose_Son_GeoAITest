@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🗺️ Visualizador de Resultados Geoespaciales</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(45deg, #2c3e50, #3498db);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+            padding: 20px;
+        }
+        
+        .image-container {
+            position: relative;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            overflow: hidden;
+        }
+        
+        .image-wrapper {
+            position: relative;
+            display: inline-block;
+            max-width: 100%;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        
+        #mapImage {
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .overlay-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        
+        .sidebar {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            height: fit-content;
+        }
+        
+        .control-section {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        .control-section h3 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            border-bottom: 2px solid #3498db;
+            pb: 5px;
+        }
+        
+        .file-input {
+            width: 100%;
+            padding: 10px;
+            border: 2px dashed #3498db;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .file-input:hover {
+            background: #ecf0f1;
+            border-color: #2980b9;
+        }
+        
+        .results-input {
+            width: 100%;
+            height: 200px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            resize: vertical;
+        }
+        
+        .button {
+            background: linear-gradient(45deg, #3498db, #2980b9);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+            width: 100%;
+            margin: 10px 0;
+        }
+        
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.4);
+        }
+        
+        .button:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 10px;
+            background: linear-gradient(45deg, #e74c3c, #f39c12);
+            color: white;
+            border-radius: 8px;
+            font-weight: bold;
+        }
+        
+        .stat-number {
+            font-size: 2em;
+            display: block;
+        }
+        
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        
+        .checkbox-group {
+            margin: 10px 0;
+        }
+        
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+            cursor: pointer;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            margin-right: 8px;
+            transform: scale(1.2);
+        }
+        
+        .legend {
+            margin-top: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 8px 0;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+            margin-right: 10px;
+            border: 2px solid #333;
+        }
+        
+        .results-summary {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .results-summary h4 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        
+        .result-item {
+            padding: 8px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #3498db;
+            font-size: 0.9em;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #7f8c8d;
+        }
+        
+        .error {
+            background: #e74c3c;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗺️ Visualizador de Resultados Geoespaciales</h1>
+            <p>Visualiza y analiza los resultados del procesamiento de mapas con IA</p>
+        </div>
+        
+        <div class="main-content">
+            <div class="image-container">
+                <div class="image-wrapper" id="imageWrapper">
+                    <img id="mapImage" src="" alt="Mapa cargado" style="display: none;">
+                    <canvas id="overlayCanvas" class="overlay-canvas"></canvas>
+                    <div class="loading" id="loadingPlaceholder">
+                        📸 Carga una imagen y pega los resultados JSON para comenzar
+                    </div>
+                </div>
+            </div>
+            
+            <div class="sidebar">
+                <div class="control-section">
+                    <h3>📁 Cargar Imagen</h3>
+                    <input type="file" id="imageInput" accept="image/*" class="file-input">
+                    <button onclick="loadSampleData()" class="button">📋 Cargar Datos de Ejemplo</button>
+                </div>
+                
+                <div class="control-section">
+                    <h3>📊 Resultados JSON</h3>
+                    <textarea id="resultsInput" class="results-input" placeholder="Pega aquí los resultados JSON de la API..."></textarea>
+                    <button onclick="processResults()" class="button">🔍 Procesar Resultados</button>
+                </div>
+                
+                <div class="control-section">
+                    <h3>📈 Estadísticas</h3>
+                    <div class="stats">
+                        <div class="stat-item">
+                            <span class="stat-number" id="objectCount">0</span>
+                            <span>Objetos</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number" id="coordCount">0</span>
+                            <span>Coordenadas</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="control-section">
+                    <h3>🎛️ Controles de Visualización</h3>
+                    <div class="checkbox-group">
+                        <label><input type="checkbox" id="showObjects" checked> Mostrar Objetos Detectados</label>
+                        <label><input type="checkbox" id="showCoordinates" checked> Mostrar Coordenadas</label>
+                        <label><input type="checkbox" id="showRegions" checked> Mostrar Regiones</label>
+                        <label><input type="checkbox" id="showLabels" checked> Mostrar Etiquetas</label>
+                    </div>
+                    <div class="controls">
+                        <button onclick="redrawOverlay()" class="button">🔄 Actualizar</button>
+                        <button onclick="downloadResults()" class="button">💾 Descargar</button>
+                    </div>
+                </div>
+                
+                <div class="legend">
+                    <h4>🎨 Leyenda</h4>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(255, 0, 0, 0.5);"></div>
+                        <span>Rectángulos</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(0, 255, 0, 0.5);"></div>
+                        <span>Círculos</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(0, 0, 255, 0.5);"></div>
+                        <span>Polígonos</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(255, 255, 0, 0.8);"></div>
+                        <span>Coordenadas</span>
+                    </div>
+                </div>
+                
+                <div class="results-summary" id="resultsSummary" style="display: none;">
+                    <h4>📋 Resumen Detallado</h4>
+                    <div id="summaryContent"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentResults = null;
+        let imageLoaded = false;
+        
+        // Configurar event listeners
+        document.getElementById('imageInput').addEventListener('change', handleImageUpload);
+        ['showObjects', 'showCoordinates', 'showRegions', 'showLabels'].forEach(id => {
+            document.getElementById(id).addEventListener('change', redrawOverlay);
+        });
+        
+        function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = document.getElementById('mapImage');
+                const loadingPlaceholder = document.getElementById('loadingPlaceholder');
+                
+                img.onload = function() {
+                    loadingPlaceholder.style.display = 'none';
+                    img.style.display = 'block';
+                    imageLoaded = true;
+                    setupCanvas();
+                    if (currentResults) {
+                        redrawOverlay();
+                    }
+                };
+                
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        function setupCanvas() {
+            const img = document.getElementById('mapImage');
+            const canvas = document.getElementById('overlayCanvas');
+            const wrapper = document.getElementById('imageWrapper');
+            
+            // Ajustar canvas al tamaño de la imagen
+            setTimeout(() => {
+                const rect = img.getBoundingClientRect();
+                const imgRect = img.getBoundingClientRect();
+                const wrapperRect = wrapper.getBoundingClientRect();
+                
+                canvas.width = img.clientWidth;
+                canvas.height = img.clientHeight;
+                canvas.style.width = img.clientWidth + 'px';
+                canvas.style.height = img.clientHeight + 'px';
+            }, 100);
+        }
+        
+        function processResults() {
+            const resultsText = document.getElementById('resultsInput').value.trim();
+            if (!resultsText) {
+                alert('Por favor, pega los resultados JSON primero.');
+                return;
+            }
+            
+            try {
+                currentResults = JSON.parse(resultsText);
+                updateStats();
+                generateSummary();
+                if (imageLoaded) {
+                    redrawOverlay();
+                }
+            } catch (error) {
+                alert('Error al parsear JSON: ' + error.message);
+                console.error('Error:', error);
+            }
+        }
+        
+        function updateStats() {
+            if (!currentResults || !currentResults.result) return;
+            
+            const objectCount = currentResults.result.detected_objects?.length || 0;
+            const coordCount = currentResults.result.coordinates?.length || 0;
+            
+            document.getElementById('objectCount').textContent = objectCount;
+            document.getElementById('coordCount').textContent = coordCount;
+        }
+        
+        function generateSummary() {
+            if (!currentResults || !currentResults.result) return;
+            
+            const result = currentResults.result;
+            const summaryDiv = document.getElementById('summaryContent');
+            const summarySection = document.getElementById('resultsSummary');
+            
+            let html = '';
+            
+            // Objetos detectados
+            if (result.detected_objects && result.detected_objects.length > 0) {
+                html += '<h4>🔍 Objetos Detectados:</h4>';
+                const objectCounts = {};
+                result.detected_objects.forEach(obj => {
+                    objectCounts[obj.class_name] = (objectCounts[obj.class_name] || 0) + 1;
+                });
+                
+                for (const [className, count] of Object.entries(objectCounts)) {
+                    html += `<div class="result-item">${className}: ${count} objetos</div>`;
+                }
+            }
+            
+            // Coordenadas
+            if (result.coordinates && result.coordinates.length > 0) {
+                html += '<h4>📍 Coordenadas Encontradas:</h4>';
+                result.coordinates.forEach((coord, index) => {
+                    html += `<div class="result-item">
+                        ${index + 1}. ${coord.text} 
+                        <br><small>Lat: ${coord.lat}, Lon: ${coord.lon} (Conf: ${(coord.confidence * 100).toFixed(1)}%)</small>
+                    </div>`;
+                });
+            } else {
+                html += '<h4>📍 Coordenadas:</h4><div class="result-item">No se detectaron coordenadas</div>';
+            }
+            
+            // Regiones
+            if (result.regions && result.regions.length > 0) {
+                html += '<h4>🗺️ Regiones de Interés:</h4>';
+                result.regions.forEach((region, index) => {
+                    html += `<div class="result-item">
+                        Región ${index + 1}: ${region.segment_path}
+                        <br><small>Bbox: [${region.bbox.join(', ')}]</small>
+                    </div>`;
+                });
+            }
+            
+            summaryDiv.innerHTML = html;
+            summarySection.style.display = 'block';
+        }
+        
+        function redrawOverlay() {
+            if (!imageLoaded || !currentResults) return;
+            
+            const canvas = document.getElementById('overlayCanvas');
+            const ctx = canvas.getContext('2d');
+            const img = document.getElementById('mapImage');
+            
+            // Limpiar canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const scaleX = canvas.width / img.naturalWidth;
+            const scaleY = canvas.height / img.naturalHeight;
+            
+            const result = currentResults.result;
+            
+            // Dibujar objetos detectados
+            if (document.getElementById('showObjects').checked && result.detected_objects) {
+                result.detected_objects.forEach((obj, index) => {
+                    const [x1, y1, x2, y2] = obj.bbox;
+                    const scaledX1 = x1 * scaleX;
+                    const scaledY1 = y1 * scaleY;
+                    const scaledX2 = x2 * scaleX;
+                    const scaledY2 = y2 * scaleY;
+                    
+                    // Color basado en tipo
+                    let color;
+                    switch (obj.class_name) {
+                        case 'rectangle_region': color = 'rgba(255, 0, 0, 0.5)'; break;
+                        case 'circle_region': color = 'rgba(0, 255, 0, 0.5)'; break;
+                        case 'polygon_region': color = 'rgba(0, 0, 255, 0.5)'; break;
+                        default: color = 'rgba(255, 165, 0, 0.5)';
+                    }
+                    
+                    ctx.strokeStyle = color.replace('0.5', '0.8');
+                    ctx.fillStyle = color;
+                    ctx.lineWidth = 2;
+                    
+                    ctx.fillRect(scaledX1, scaledY1, scaledX2 - scaledX1, scaledY2 - scaledY1);
+                    ctx.strokeRect(scaledX1, scaledY1, scaledX2 - scaledX1, scaledY2 - scaledY1);
+                    
+                    // Etiquetas
+                    if (document.getElementById('showLabels').checked) {
+                        ctx.fillStyle = 'black';
+                        ctx.font = '12px Arial';
+                        ctx.fillText(`${obj.class_name} #${index + 1}`, scaledX1, scaledY1 - 5);
+                    }
+                });
+            }
+            
+            // Dibujar coordenadas
+            if (document.getElementById('showCoordinates').checked && result.coordinates) {
+                ctx.fillStyle = 'rgba(255, 255, 0, 0.8)';
+                ctx.strokeStyle = 'rgba(255, 215, 0, 1)';
+                ctx.lineWidth = 3;
+                
+                result.coordinates.forEach((coord, index) => {
+                    // Posición estimada (en caso de que las coordenadas sean válidas)
+                    const x = coord.lon > 0 ? (coord.lon / 1000) * scaleX : 50 + index * 30;
+                    const y = coord.lat > 0 ? (coord.lat / 1000) * scaleY : 50 + index * 30;
+                    
+                    // Dibujar círculo
+                    ctx.beginPath();
+                    ctx.arc(x, y, 8, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.stroke();
+                    
+                    // Etiqueta
+                    if (document.getElementById('showLabels').checked) {
+                        ctx.fillStyle = 'black';
+                        ctx.font = 'bold 12px Arial';
+                        ctx.fillText(coord.text, x + 12, y + 4);
+                    }
+                });
+            }
+            
+            // Dibujar regiones
+            if (document.getElementById('showRegions').checked && result.regions) {
+                ctx.strokeStyle = 'rgba(255, 0, 255, 0.8)';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([5, 5]);
+                
+                result.regions.forEach((region, index) => {
+                    const [x1, y1, x2, y2] = region.bbox;
+                    const scaledX1 = x1 * scaleX;
+                    const scaledY1 = y1 * scaleY;
+                    const scaledX2 = x2 * scaleX;
+                    const scaledY2 = y2 * scaleY;
+                    
+                    ctx.strokeRect(scaledX1, scaledY1, scaledX2 - scaledX1, scaledY2 - scaledY1);
+                    
+                    if (document.getElementById('showLabels').checked) {
+                        ctx.fillStyle = 'purple';
+                        ctx.font = 'bold 12px Arial';
+                        ctx.fillText(`Región ${index + 1}`, scaledX1, scaledY1 - 5);
+                    }
+                });
+                
+                ctx.setLineDash([]);
+            }
+        }
+        
+        function loadSampleData() {
+            const sampleData = {
+                "job_id": "c1bb939d-e383-4ee3-9a7a-5907a79ca8cb",
+                "status": "completed",
+                "result": {
+                    "detected_objects": [
+                        {
+                            "bbox": [357, 517, 435, 522],
+                            "class_name": "polygon_region",
+                            "confidence": 0.7
+                        },
+                        {
+                            "bbox": [296, 508, 308, 522],
+                            "class_name": "polygon_region",
+                            "confidence": 0.7
+                        },
+                        {
+                            "bbox": [21, 417, 139, 525],
+                            "class_name": "rectangle_region",
+                            "confidence": 0.7
+                        }
+                    ],
+                    "coordinates": [],
+                    "regions": [
+                        {
+                            "coordinates": [],
+                            "segment_path": "segment_c1bb939d-e383-4ee3-9a7a-5907a79ca8cb_1f110423.jpg",
+                            "bbox": [357, 517, 435, 522]
+                        }
+                    ]
+                }
+            };
+            
+            document.getElementById('resultsInput').value = JSON.stringify(sampleData, null, 2);
+            processResults();
+        }
+        
+        function downloadResults() {
+            if (!currentResults) {
+                alert('No hay resultados para descargar.');
+                return;
+            }
+            
+            const dataStr = JSON.stringify(currentResults, null, 2);
+            const dataBlob = new Blob([dataStr], {type: 'application/json'});
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `geospatial_results_${currentResults.job_id}.json`;
+            link.click();
+            URL.revokeObjectURL(url);
+        }
+        
+        // Redimensionar canvas cuando se redimensiona la ventana
+        window.addEventListener('resize', () => {
+            if (imageLoaded) {
+                setTimeout(setupCanvas, 100);
+                setTimeout(redrawOverlay, 200);
+            }
+        });
+    </script>
+</body>
+</html>
