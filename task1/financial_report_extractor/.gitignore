@@ -6,6 +6,7 @@ __pycache__/
 *.sqlite
 .DS_Store
 venv_311/
+venv/
 .env/
 *.egg-info/
 dist/

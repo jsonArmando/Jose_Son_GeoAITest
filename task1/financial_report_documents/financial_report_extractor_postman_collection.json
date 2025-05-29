@@ -1,0 +1,207 @@
+{
+	"info": {
+		"_postman_id": "YOUR_COLLECTION_ID_REPORTS_V2",
+		"name": "Financial Report Extractor API",
+		"description": "Colección de Postman para la API de Extracción de Informes Financieros.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1. Trigger Extraction (Default Years)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/reports/trigger-extraction",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"reports",
+						"trigger-extraction"
+					]
+				},
+				"description": "Inicia el proceso de extracción de informes para los años definidos por defecto en la configuración del servidor (o sin especificar años)."
+			},
+			"response": []
+		},
+		{
+			"name": "1.1 Trigger Extraction (Specific Years)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"start_year\": 2023,\n    \"end_year\": 2023\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/reports/trigger-extraction",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"reports",
+						"trigger-extraction"
+					]
+				},
+				"description": "Inicia el proceso de extracción de informes para un rango de años específico."
+			},
+			"response": []
+		},
+		{
+			"name": "2. Get Extracted Data by Report ID",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/api/v1/reports/extracted-data/{{report_id}}",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"reports",
+						"extracted-data",
+						"{{report_id}}"
+					],
+					"variable": [
+						{
+							"key": "report_id",
+							"value": "1",
+							"description": "ID del informe a consultar (ej: 1)"
+						}
+					]
+				},
+				"description": "Obtiene los datos extraídos y el score de precisión para un informe específico. Reemplaza `{{report_id}}` con un ID válido."
+			},
+			"response": []
+		},
+		{
+			"name": "3. Get Reports Summary",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/api/v1/reports/summary",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"reports",
+						"summary"
+					]
+				},
+				"description": "Obtiene un resumen de todos los informes procesados, su estado y scores."
+			},
+			"response": []
+		},
+		{
+			"name": "4. Get Annual Table View by Year",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/api/v1/reports/annual-table/{{year}}",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"reports",
+						"annual-table",
+						"{{year}}"
+					],
+					"variable": [
+						{
+							"key": "year",
+							"value": "2023",
+							"description": "Año para el cual se quiere la tabla anual consolidada (ej: 2023)"
+						}
+					]
+				},
+				"description": "Obtiene una vista de tabla anual consolidada para un año específico. (Endpoint conceptual, el backend necesita desarrollo completo)."
+			},
+			"response": []
+		},
+		{
+			"name": "Root",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						""
+					]
+				},
+				"description": "Verifica que la API está funcionando."
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string",
+			"description": "URL base de la API. Por defecto para ejecución local."
+		},
+		{
+			"key": "report_id",
+			"value": "1",
+			"type": "string",
+			"description": "ID de ejemplo para un informe. Actualizar según sea necesario."
+		},
+		{
+			"key": "year",
+			"value": "2023",
+			"type": "string",
+			"description": "Año de ejemplo para la tabla anual."
+		}
+	]
+}
