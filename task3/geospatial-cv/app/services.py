@@ -42,7 +42,7 @@ class GeospatialProcessor:
 
         # Redis (opcional)
         self.redis_client: Optional[redis.Redis] = None
-        if redis_host and redis_host != 'localhost':  # Solo intentar si no es localhost por defecto
+        if redis_host and redis_host != 'localhost':
             try:
                 self.redis_client = redis.Redis(host=redis_host, port=6379, decode_responses=True)
                 self.redis_client.ping()
@@ -52,7 +52,7 @@ class GeospatialProcessor:
                 self.redis_client = None
 
     async def _run_in_threadpool(self, func, *args, **kwargs):
-        """Ejecuta una función síncrona en el threadpool del event loop."""
+        """Ejecuta една función síncrona en el threadpool del event loop."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, func, *args, **kwargs)
 
@@ -70,6 +70,9 @@ class GeospatialProcessor:
 
         logger.info(f"📐 Imagen cargada: {image.shape[1]}x{image.shape[0]} pixels")
 
+        # Preprocesar imagen para mejorar OCR
+        processed_image = self._preprocess_image_for_ocr(image)
+
         # 1. Detección de objetos (YOLO si disponible, sino detección básica)
         detected_objects_list = await self._run_in_threadpool(
             self._detect_cartographic_elements_sync, image
@@ -77,7 +80,7 @@ class GeospatialProcessor:
         
         # 2. Extracción de coordenadas con OCR mejorado
         coordinates_list = await self._run_in_threadpool(
-            self._extract_coordinates_sync, image, detected_objects_list
+            self._extract_coordinates_sync, processed_image, detected_objects_list
         )
         
         # 3. Análisis espacial mejorado
@@ -93,6 +96,21 @@ class GeospatialProcessor:
             coordinates=coordinates_list,
             regions=regions_list
         )
+
+    def _preprocess_image_for_ocr(self, image: np.ndarray) -> np.ndarray:
+        """Preprocesa la imagen para mejorar la precisión del OCR."""
+        # Convertir a escala de grises
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Aplicar un filtro de suavizado para reducir ruido
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        
+        # Aplicar umbralización adaptativa para mejorar el contraste
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
+        )
+        
+        return thresh
 
     def _detect_cartographic_elements_sync(self, image: np.ndarray) -> List[DetectedObject]:
         """Detecta elementos cartográficos usando YOLO o métodos alternativos."""
@@ -206,8 +224,8 @@ class GeospatialProcessor:
         border_coords = []
         h, w = image.shape[:2]
         
-        # Definir regiones de borde (10% de cada lado)
-        border_margin = 0.1
+        # Definir regiones de borde (15% de cada lado para cubrir más área)
+        border_margin = 0.15
         top_region = int(h * border_margin)
         bottom_region = int(h * (1 - border_margin))
         left_region = int(w * border_margin)
@@ -226,7 +244,6 @@ class GeospatialProcessor:
                            center_x < left_region or center_x > right_region)
                 
                 if is_border:
-                    # Buscar patrones de coordenadas más específicos para bordes
                     coord = self._parse_border_coordinate_text(text, confidence, bbox_coords, center_x, center_y)
                     if coord:
                         border_coords.append(coord)
@@ -235,60 +252,66 @@ class GeospatialProcessor:
         return border_coords
 
     def _parse_coordinate_text(self, text: str, confidence: float, bbox_coords=None) -> Optional[Coordinate]:
-        """Parsea texto para extraer coordenadas geográficas."""
+        """Parsea texto para extraer coordenadas geográficas, optimizado para UTM."""
         text = text.strip()
         
-        # Patrones mejorados para diferentes formatos de coordenadas
+        # Patrones mejorados para UTM (como en la imagen: E 421500, N 4422150)
         patterns = [
-            # E 421500, E 422250 (formato de tu imagen)
+            # Easting (E 421500)
             r'E\s*(\d{6})',
-            r'N\s*(\d{6,7})',
-            # Coordenadas decimales
+            # Northing (N 4422150)
+            r'N\s*(\d{7})',
+            # Coordenadas decimales (para otros formatos)
             r'(-?\d+\.?\d*)[°\s]*([NS])?[\s,]*(-?\d+\.?\d*)[°\s]*([EW])?',
             # Grados, minutos, segundos
             r'(-?\d+)[°]\s*(\d+)[\']\s*(\d+\.?\d*)[\"]\s*([NS])[\s,]*(-?\d+)[°]\s*(\d+)[\']\s*(\d+\.?\d*)[\"]\s*([EW])',
-            # Solo números grandes (coordenadas UTM)
-            r'^(\d{6,7})$',
         ]
         
         for pattern_idx, pattern in enumerate(patterns):
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 try:
-                    if pattern_idx == 0:  # E coordinate
+                    if pattern_idx == 0:  # Easting (E 421500)
                         return Coordinate(
                             lat=0,  # Placeholder
                             lon=float(match.group(1)),
                             confidence=confidence,
                             text=text
                         )
-                    elif pattern_idx == 1:  # N coordinate
+                    elif pattern_idx == 1:  # Northing (N 4422150)
                         return Coordinate(
                             lat=float(match.group(1)),
                             lon=0,  # Placeholder
                             confidence=confidence,
                             text=text
                         )
-                    elif pattern_idx in [2, 3]:  # Decimal or DMS
-                        # Lógica para coordenadas decimales completas
-                        if len(match.groups()) >= 4:
-                            lat_val = float(match.group(1))
-                            lon_val = float(match.group(3))
+                    elif pattern_idx == 2:  # Decimal
+                        lat_val = float(match.group(1))
+                        lon_val = float(match.group(3))
+                        return Coordinate(
+                            lat=lat_val,
+                            lon=lon_val,
+                            confidence=confidence,
+                            text=text
+                        )
+                    elif pattern_idx == 3:  # DMS
+                        lat_deg, lat_min, lat_sec, lat_dir = match.group(1), match.group(2), match.group(3), match.group(4)
+                        lon_deg, lon_min, lon_sec, lon_dir = match.group(5), match.group(6), match.group(7), match.group(8)
+                        
+                        lat = float(lat_deg) + float(lat_min)/60 + float(lat_sec)/3600
+                        lon = float(lon_deg) + float(lon_min)/60 + float(lon_sec)/3600
+                        
+                        if lat_dir.upper() == 'S':
+                            lat = -lat
+                        if lon_dir.upper() == 'W':
+                            lon = -lon
                             
-                            return Coordinate(
-                                lat=lat_val,
-                                lon=lon_val,
-                                confidence=confidence,
-                                text=text
-                            )
-                    elif pattern_idx == 4:  # Large numbers (UTM)
-                        num = float(match.group(1))
-                        # Distinguir entre Easting y Northing por magnitud
-                        if num > 1000000:  # Likely Northing
-                            return Coordinate(lat=num, lon=0, confidence=confidence, text=text)
-                        else:  # Likely Easting
-                            return Coordinate(lat=0, lon=num, confidence=confidence, text=text)
-                            
+                        return Coordinate(
+                            lat=lat,
+                            lon=lon,
+                            confidence=confidence,
+                            text=text
+                        )
                 except (ValueError, IndexError) as e:
                     logger.debug(f"Error parseando coordenada '{text}': {e}")
                     continue
@@ -297,9 +320,8 @@ class GeospatialProcessor:
 
     def _parse_border_coordinate_text(self, text: str, confidence: float, bbox_coords, center_x: float, center_y: float) -> Optional[Coordinate]:
         """Parsea coordenadas específicamente encontradas en bordes."""
-        # Buscar patrones típicos de coordenadas en bordes de mapas
         easting_pattern = r'E\s*(\d{6})'
-        northing_pattern = r'N\s*(\d{6,7})'
+        northing_pattern = r'N\s*(\d{7})'
         
         easting_match = re.search(easting_pattern, text)
         northing_match = re.search(northing_pattern, text)
@@ -333,18 +355,16 @@ class GeospatialProcessor:
                 logger.info(f"🎯 Procesando coordenada {i+1}: {coord.text}")
                 
                 # Crear bbox alrededor del área de la coordenada
-                # Usar las coordenadas reales si están disponibles
                 if coord.lat != 0 and coord.lon != 0:
-                    # Crear región centrada en la coordenada
-                    center_x = min(max(int(coord.lon / 1000), 0), image.shape[1] - 100)  # Escalar
-                    center_y = min(max(int(coord.lat / 1000), 0), image.shape[0] - 100)  # Escalar
+                    # Ajustar escala para UTM (simplificado: usar posición relativa)
+                    center_x = min(max(int((coord.lon - 421500) / 10), 0), image.shape[1] - 100)
+                    center_y = min(max(int((coord.lat - 4422150) / 10), 0), image.shape[0] - 100)
                 else:
-                    # Usar posición aleatoria si no hay coordenadas válidas
                     center_x = image.shape[1] // 2
                     center_y = image.shape[0] // 2
                 
                 # Crear bbox de región
-                region_size = 100
+                region_size = 150  # Aumentar tamaño para cubrir más área
                 bbox = [
                     max(0, center_x - region_size//2),
                     max(0, center_y - region_size//2),
