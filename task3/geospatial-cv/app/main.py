@@ -8,6 +8,8 @@ import os
 import json
 import logging
 import datetime # Para JobStatus
+import asyncio
+logger = logging.getLogger(__name__)
 
 # --- Configuración de Logging Global ---
 logging.basicConfig(
@@ -44,7 +46,7 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 # ESTA LÍNEA DEBE ESTAR ANTES DE USAR @app.on_event o @app.ruta
 app = FastAPI(
     title="Advanced Geospatial Computer Vision API",
-    version="2.0.0",
+    version="1.0.0",  # Cambiado de 2.0.0 a 1.0.0
     description="API optimizada para análisis geoespacial con manejo de tareas en segundo plano."
 )
 # --- FIN Inicialización de la Aplicación FastAPI ---
@@ -114,8 +116,8 @@ async def run_map_processing_task(
         db.update_job_failed(job_id, f"Error inesperado del servidor: {str(e)}")
 
 # --- Endpoints de la API ---
-@app.post("/api/v2/analyze-map", response_model=JobStatus, status_code=202)
-async def analyze_map_v2(
+@app.post("/api/v1/analyze-map", response_model=JobStatus, status_code=202)  # Cambiado de v2 a v1
+async def analyze_map_v1(  # Cambiado nombre de función
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: DatabaseManager = Depends(get_db_manager),
@@ -153,8 +155,8 @@ async def analyze_map_v2(
     
     return job_status_obj
 
-@app.get("/api/v2/jobs/{job_id}", response_model=JobStatus)
-async def get_job_status_v2(job_id: str, db: DatabaseManager = Depends(get_db_manager)):
+@app.get("/api/v1/jobs/{job_id}", response_model=JobStatus)  # Cambiado de v2 a v1
+async def get_job_status_v1(job_id: str, db: DatabaseManager = Depends(get_db_manager)):  # Cambiado nombre de función
     logger.info(f"Solicitando estado para job_id: {job_id}")
     job = db.get_job(job_id)
     if not job:
@@ -163,8 +165,8 @@ async def get_job_status_v2(job_id: str, db: DatabaseManager = Depends(get_db_ma
     logger.info(f"Retornando estado para job_id {job_id}: {job.status}")
     return job
 
-@app.get("/api/v2/jobs/{job_id}/segments/{segment_filename}")
-async def get_segment_v2(job_id: str, segment_filename: str, db: DatabaseManager = Depends(get_db_manager)):
+@app.get("/api/v1/jobs/{job_id}/segments/{segment_filename}")  # Cambiado de v2 a v1
+async def get_segment_v1(job_id: str, segment_filename: str, db: DatabaseManager = Depends(get_db_manager)):  # Cambiado nombre de función
     logger.info(f"Solicitando segmento '{segment_filename}' para job_id: {job_id}")
     
     if not segment_filename or ".." in segment_filename or "/" in segment_filename or "\\" in segment_filename :
@@ -196,7 +198,7 @@ async def get_segment_v2(job_id: str, segment_filename: str, db: DatabaseManager
     return FileResponse(str(segment_path))
 
 @app.get("/health")
-async def health_check_v2(processor: GeospatialProcessor = Depends(get_geospatial_processor)):
+async def health_check_v1(processor: GeospatialProcessor = Depends(get_geospatial_processor)):  # Cambiado nombre de función
     redis_status = "disabled"
     if processor.redis_client:
         redis_status = "disconnected"
@@ -208,7 +210,7 @@ async def health_check_v2(processor: GeospatialProcessor = Depends(get_geospatia
             logger.warning(f"Fallo en ping a Redis durante health check: {e}")
             redis_status = "ping_failed"
             
-    health_data = {"api_status": "healthy", "service_name": "Geospatial CV API v2", "redis_status": redis_status}
+    health_data = {"api_status": "healthy", "service_name": "Geospatial CV API v1", "redis_status": redis_status}  # Cambiado de v2 a v1
     logger.debug(f"Health check response: {health_data}")
     return health_data
 

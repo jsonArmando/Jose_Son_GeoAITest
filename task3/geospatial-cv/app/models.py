@@ -5,6 +5,17 @@ import sqlite3
 from pathlib import Path
 import json
 import datetime # Para timestamps
+import logging
+
+logger = logging.getLogger(__name__)
+
+# --- Configuración de Logging Global ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger("geospatial_api")
 
 # --- Tipos de Datos del Dominio ---
 class Coordinate(BaseModel):
